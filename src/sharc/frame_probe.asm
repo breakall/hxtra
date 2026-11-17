@@ -8,6 +8,10 @@
 // keeps the addresses whose word 255 is the matching last word, and writes into words
 // 200..202 of each: 600DF00D, a tag, the call count. The M4's receive hook then shows
 // whether those words arrive.
+//
+// Every other core (other compressors, the 3-Band Comp's, the Busy One amps, the Sweep Echo) goes straight to the stock code:
+// a preset near the DSP limit has no room for this wrapper's work on each of them (issue #84 froze the unit). With no
+// metered core the frames carry no marker, and the M4 turns the meter off after 1024 frames.
 
 .equ MAGIC1,  0xFACEF00D
 .equ MAGIC2,  0xF00DFACE
@@ -50,7 +54,7 @@ LA_ATT:   .word 0x3F7CABBA                // the meter's fixed Attack and Releas
 LA_REL:   .word 0x3F7FEED8
 GR_PACK:  .space 1
 GR_CORE:  .space 1                      // the state (I0) of the core the meter shows: the last whose Mtr Thk was set above 0
-GR_MISS:  .space 1                      // other cores' calls since it last ran: past 64 it is gone (another preset)
+FP_R1:    .space 1
 KN_TAB:   .space 65                     // per core: its state, then its Mtr Pos, Dir and Thk; then the next entry to replace
 KK_TAB:   .space 65                     // per 0x2710 core: its state, its Attack and Release as the meter's coefficients, 0; then the next
 FC_R3:    .space 1
@@ -70,6 +74,18 @@ ENTRY_2710:
     R0 = 2;
 fp_entry:
     DM(FP_KIND) = R0;
+    DM(FP_R1) = R1;
+    R0 = I0;
+    R1 = DM(GR_CORE);
+    COMP(R0, R1);
+    R1 = DM(FP_R1);
+    R0 = DM(FP_KIND);
+    IF EQ JUMP fp_mine;
+    R0 = PASS R0;
+    R0 = DM(FP_R0);
+    IF NE JUMP ORIG_2719;
+    JUMP ORIG;
+fp_mine:
     R0 = DM(FP_R0);
     DM(FP_I8) = I8;
     DM(FP_LOG + 3) = I1;                // as called
@@ -122,21 +138,6 @@ fp_ran:
     DM(FP_SAVE + 15) = I6;
     DM(FP_SAVE + 16) = L6;
     L4 = 0; L5 = 0; L6 = 0;
-
-    R0 = DM(FP_LOG + 6);                // only the metered core is measured: other compressors, the Busy One amps and the Sweep Echo run these cores too
-    R1 = DM(GR_CORE);
-    COMP(R0, R1);
-    IF EQ JUMP fp_mine;
-    R0 = DM(GR_MISS);
-    R1 = 65;
-    COMP(R0, R1);
-    IF GE JUMP fp_pack;
-    R0 = R0 + 1;
-    DM(GR_MISS) = R0;
-    JUMP fp_pack;
-fp_mine:
-    R0 = 0;
-    DM(GR_MISS) = R0;
 
     I4 = DM(FP_LOG + 3);                // and after
     CALL fp_max;
@@ -247,10 +248,6 @@ fp_pack:
     R0 = DM(GR_CORE);                   // GR_TAG, Position, Direction, Thickness in bytes 3..0; 0 with no metered core
     R0 = PASS R0;
     IF EQ JUMP fp_bad;
-    R1 = DM(GR_MISS);
-    R2 = 64;
-    COMP(R1, R2);
-    IF GT JUMP fp_bad;
     I4 = KN_TAB;
     R2 = 16;
 fp_kn:

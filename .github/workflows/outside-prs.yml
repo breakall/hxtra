@@ -1,0 +1,24 @@
+name: outside PRs
+
+# pull_request_target runs this file from the base branch, so it lives on main and next; it never checks out PR code.
+on:
+  pull_request_target:
+    types: [opened, reopened, edited]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  retarget:
+    if: >-
+      github.event.pull_request.base.ref == 'main' &&
+      !contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association)
+    runs-on: ubuntu-latest
+    steps:
+      - name: retarget to next
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api -X PATCH "repos/$GITHUB_REPOSITORY/pulls/$PR" -f base=next > /dev/null
+          gh pr comment "$PR" -R "$GITHUB_REPOSITORY" --body "Thanks! Pull requests go to \`next\`, the staging branch, so this one now targets \`next\`. A release merges \`next\` into \`main\`. A maintainer reviews and approves outside pull requests before they merge."

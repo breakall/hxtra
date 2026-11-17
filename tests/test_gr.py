@@ -124,14 +124,37 @@ def test_probe_window_peaks_and_frame_tail():
     assert s.rd(FRAME + 255) == 0xD00FECAF
 
 
+@pytest.mark.parametrize('entry', ['ENTRY_271A', 'ENTRY_2719', 'ENTRY_2710'])
+@pytest.mark.parametrize('metered', [False, True])
+def test_probe_other_cores_go_straight_to_the_stock_code(entry, metered):
+    """Issue #84: two 3-Band Comps (nine 0x271a cores) in a preset near the DSP limit froze the unit, so a core the meter does
+    not show costs a few instructions over the stock core alone and leaves its output and registers as the core's."""
+    alone, sym = probe()
+    for r in range(8):
+        alone.u[r] = 0x100 + r
+    c0 = alone.cycles
+    block(alone, sym, 'FAKE_CORE', 0x97000, 0.5)
+    stock = alone.cycles - c0
+    s, sym = probe()
+    if metered:
+        knobs(s, sym, 'CTRL_271A', 0x96000, 0, 0, 20)
+    for r in range(8):
+        s.u[r] = 0x100 + r
+    c0 = s.cycles
+    block(s, sym, entry, 0x97000, 0.5)
+    assert s.cycles - c0 - stock <= 16
+    assert [s.rd(OUT + k) for k in range(16)] == [alone.rd(OUT + k) for k in range(16)]
+    assert [s.u[r] for r in range(8)] == [alone.u[r] for r in range(8)]
+
+
 def test_probe_measures_only_the_metered_core():
-    """Another core's blocks (another compressor, an amp sharing the core) move no window; the meter goes off 64 blocks after its core."""
+    """Another core's blocks (another compressor, an amp sharing the core) neither scan nor write a frame; the M4 times the meter out."""
     s, sym = probe()
     knobs(s, sym, 'CTRL_2719', 0x96000, 0, 0, 20)
     for _ in range(65):
         block(s, sym, 'ENTRY_2719', 0x97000, 0.5)
-    assert s.rd(FRAME + 250) == 0
-    assert s.rd(FRAME + 218) == 0
+    assert s.rd(sym('FP_CUR')) == 0
+    assert [s.rd(FRAME + w) for w in range(200, 253)] == [0] * 53
     block(s, sym, 'ENTRY_2719', 0x96000, 0.5)
     assert s.rd(FRAME + 218) == 0x6B000014
 
@@ -411,8 +434,8 @@ def test_comp_patch_refuses_a_second_run(comp_patched):
 # ---- the whole GR build, pinned as tests/test_firmware.py pins the default one
 
 GR_BUILT_MD5 = {
-    'HX_GR': 'b667de3d018b5eef3e43b59294875e10',
-    'HX_GR HX_CLICK': '747bb463fe9f993d913708390be3ede4',    # patch_click.py adds a model, which would drop knobs written before it
+    'HX_GR': 'd03be3453ec333406e934dee39838ca7',
+    'HX_GR HX_CLICK': '094ef477872cc47b4e899f6821ed8621',    # patch_click.py adds a model, which would drop knobs written before it
 }
 
 

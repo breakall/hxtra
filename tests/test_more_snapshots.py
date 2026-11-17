@@ -409,6 +409,21 @@ def test_a_preset_load_in_bank_b_draws_the_cameras_again(mgr):
     assert mgr.paint() == ([], []) and mgr.paint('home') == ([], []), 'a load in bank A leaves them alone'
 
 
+@pytest.mark.parametrize('leave', ['flip', 'load'])
+def test_leaving_bank_b_leaves_a_renamed_snapshots_label_alone(mgr, leave):
+    """Issue #125: a renamed snapshot's label is text over a hidden camera; marking that camera's node made the stock erase fill
+    black across the name, which nothing then redrew."""
+    mgr.press(0)
+    if leave == 'flip':
+        mgr.press(0)
+    else:
+        mgr.call('snaps_loaded', MGR, 0, 0, 0)
+    mgr.m.u8(LABELS + 0x1d, 0)
+    assert mgr.paint('home') == (['widget lock', 'widget unlock', ('redraw', 0, 1)], [2, 3])
+    mgr.m.u8(ICON + 0x1d, 0)
+    assert mgr.paint() == (['widget lock', 'widget unlock', ('redraw', 0, 1)], [])
+
+
 def test_a_save_in_bank_b_keeps_the_numbers(mgr):
     """The save's flip to bank A marks the cameras for a redraw; the next paint draws bank B's numbers over them again."""
     mgr.press(0)

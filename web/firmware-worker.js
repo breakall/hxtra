@@ -28,7 +28,7 @@ var STOCK_MD5 = {
   "7c2ebdf1bffb6bcc5f89dda97f91e40c": "HX_Effects",
 };
 var BUILT_MD5 = {
-  "HX_Stomp": "195682572258a3347d94ca7610a697b8",
+  "HX_Stomp": "e2ef4415d8f8603bf6153665b4785a59",
   "HX_Stomp_XL": "8918ab60ebff62ebfccd4fccb2bed85a",
   "HX_Effects": "2efb98791581b67116ba82c5ecd30ea2",
 };

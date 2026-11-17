@@ -130,7 +130,7 @@ def test_two_instances_own_separate_rings_and_counters():
 
 @pytest.mark.parametrize('slots,click,gr,free', [(3, False, False, 512), (3, True, False, 299),
                                                (2, False, False, 2528), (2, True, False, 2315),
-                                               (2, True, True, 1077)])
+                                               (2, True, True, 1086)])
 def test_current_profiles_place_real_encoded_probe_without_overlap(slots, click, gr, free):
     p = ml.profile(slots, click, gr)
     assert p.block2_free_words == 4

@@ -29,7 +29,7 @@ This writes `build/HX_Stomp_v3.80.0_HXtra.hxf` (from the XL's file, `build/HX_St
 4. Adds the kernel to the DSP's boot code (`patch_amp.py patch`).
 5. Recomputes and verifies every checksum: the container MD5, the archive Fletcher-32 and CRC-32, and the image CRCs.
 
-The build is deterministic. The default HX Stomp build (no switches) has MD5 `195682572258a3347d94ca7610a697b8`, pinned in `tests/test_firmware.py`.
+The build is deterministic. The default HX Stomp build (no switches) has MD5 `e2ef4415d8f8603bf6153665b4785a59`, pinned in `tests/test_firmware.py`.
 
 A default build changes only 5 of the 15 parts of the firmware: the main application, the DSP program, the model list, the DSP graph library and the image store (the boot picture; emoji in the boot text also change the font table). **The bootloader is never touched**, which is what keeps [recovery](https://wisemandenny.github.io/hxtra/web/#recovery) possible.
 
@@ -116,7 +116,7 @@ The build writes `build/microlooper-build.json` with the native callbacks, runti
 manifest verification, resource counts and final HXF MD5. It rejects missing
 controls, wrong slot/PID/default or state mappings, changed native heap setup,
 overlap through external instruction/data aliases, and partition overflow. The
-complete NAM2 + GR + metronome DSP image currently leaves **4 bytes** below the
+complete NAM2 + GR + metronome DSP image currently leaves **40 bytes** below the
 512 KiB Entry 2 limit; NAM3 + metronome leaves 3,724 bytes. Atmosphere's external fetch
 timing and native stereo binding still require hardware qualification.
 
