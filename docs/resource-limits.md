@@ -79,6 +79,22 @@ The HX Stomp has two processors. The **M4** (LPC4350, the CPU) runs the screen, 
 | Preset IDs | Relocate the 833-entry arrays and patch every bounds check | unlimited | hypothesis |
 | Entry 0 / Entry 3 / Blob 0 growth | Allocate the tables once with spare rows; drop the stale copies | ~46 KB per model, ~156 KB of Entry 3 | hypothesis |
 
+## Atmosphere-looper development
+
+The current development Atmosphere preserves baseline NAM3, or NAM2 with GR,
+without changing NAM code. Its 1093-instruction core, 101-instruction planar
+bridge and 33-instruction native callbacks occupy 1845 normal words in reserved
+DDR2, initialized through one packed normal-data loader record. Native heap
+literals, NAM code/data and external physical aliases are checked before linking.
+
+After equivalent zero-data encoding, the complete NAM2 + GR + metronome image
+uses 524272/524288 Entry 2 bytes: **16 bytes free**. NAM3 + metronome uses
+520552 bytes: **3736 free**. Instance payload remains 199 DM words, zero private
+PM and 48000 SDRAM words; graph/framework overhead is separate. The external
+placement resolves resident memory fit offline, not real-time fetch/cache cost
+or hardware qualification. See [placement evidence](research/features/microlooper-code-placement.md)
+and the [implementation plan](microlooper-plan.md). Default release profiles are unchanged.
+
 ## Not measured yet
 
 1. M4 CPU headroom (a DWT `CYCCNT` sample shown in a settings value).

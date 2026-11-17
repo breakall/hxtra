@@ -12,6 +12,7 @@ Before writing anything, read [conventions.md](conventions.md): the status tags,
 | [tools.md](tools.md) | every tool in `tools/` and the build switches | looking for a tool, or how to build an experiment |
 | [features/engine.md](features/engine.md) | a feature module: its settings, flag, inputs, and the hooks it shares (`chain_*`) or owns (`own_entry`, `own_call`); Entries 7 and 8 access | starting a new feature, or hooking a site |
 | [../resource-limits.md](../resource-limits.md) | which resources are nearly full and what changes cost | planning a feature |
+| [../effect-interface.md](../effect-interface.md) | proposed effect declaration, DSP/memory admission, instance ownership and migration contract | adding an audio effect or designing shared NAM/Atmosphere integration |
 | [ideas.md](ideas.md) | open ideas from the old notes | looking for what to do next |
 
 ## Formats
@@ -60,6 +61,14 @@ Before writing anything, read [conventions.md](conventions.md): the status tags,
 | [features/tuner-page.md](features/tuner-page.md) | the tuner settings view and the page HXtra adds to it | changing the tuner's settings view |
 | [features/long-press.md](features/long-press.md) | holds per footswitch, FS6..FS10 on CC 20..24, CC text, the footswitch probes | working on long press, or footswitch holds |
 | [features/more-snapshots.md](features/more-snapshots.md) | bank B (snapshots 4..6), the bank marker, saving and the preset file key, next and previous across the banks | working on more snapshots |
+| [features/microlooper-switch.md](features/microlooper-switch.md) | native parameter writes, selective bypass filtering, tick polling and transport restore protection | integrating one-switch micro-looper control |
+| [features/microlooper-integration.md](features/microlooper-integration.md) | earlier fixed-profile native init/allocation, ownership and development build; revised resource requirement and hardware limits | checking existing integration evidence and what remains before user testing |
+| [features/microlooper-preset-resources.md](features/microlooper-preset-resources.md) | preset-dependent NAM/Atmosphere resource requirement, static memory constraints and allocation research gates | replacing the firmware-wide NAM1 restriction with resource use based on actual preset blocks |
+| [features/microlooper-code-placement.md](features/microlooper-code-placement.md) | implemented external ISA placement, native heap guards, packed boot encoding and baseline NAM preservation | linking Atmosphere without changing NAM code or consuming its fixed slot storage |
+| [features/microlooper-hardware-log.md](features/microlooper-hardware-log.md) | first RAM-boot freeze, recovery and controlled M4-hook comparisons | checking actual hardware results before installing a Atmosphere image |
+| [features/cosmos-echo-interface.md](features/cosmos-echo-interface.md) | stock Cosmos schema/control graph, executed buffer allocation/binding, arena reuse, reset/teardown and native failure handling | designing effect integration around native ownership and distinguishing DSP readiness from request success |
+| [features/microlooper-adapter.md](features/microlooper-adapter.md) | native stereo context probe, graph evidence and unresolved sample layout | integrating the micro-looper DSP adapter |
+| [features/microlooper.md](features/microlooper.md) | Atmosphere micro-looper port: DSP memory, controls, lifecycle, editor compatibility, reference tests and feasibility gates | planning or implementing the stereo micro-looper |
 | [features/metronome.md](features/metronome.md) | the Metronome block: model, browser folder, look, kernel | working on the Metronome, or adding an effect model |
 | [features/tap-color.md](features/tap-color.md) | Tap LED Color: the TAP ring, icon and label in a palette colour | working on the TAP footswitch's look |
 | [features/boot-splash.md](features/boot-splash.md) | a custom boot picture, the boot line's text, colour emoji | working on the boot screen |

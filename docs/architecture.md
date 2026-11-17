@@ -30,6 +30,12 @@ HXtra forks it at upstream commit `2e80164`, has merged upstream up to `01c0bb0`
 
 The [research notes](research/INDEX.md) have the details: addresses, the M4-to-DSP frame format, the Settings and Home screen internals, and the open problems. Start from their index.
 
+The proposed [effect interface](effect-interface.md) defines a shared declaration,
+resource-admission and lifecycle contract for NAM, the Atmosphere and future
+audio effects. Atmosphere now uses the shared declaration compiler and external ISA
+placement, preserving the existing NAM profiles. Shared runtime memory admission
+and hardware qualification remain separate implementation work.
+
 ## Repository layout
 
 ```

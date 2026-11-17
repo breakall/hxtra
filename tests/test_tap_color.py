@@ -292,7 +292,20 @@ def test_without_the_flag_the_sites_stay_stock():
 
 
 @pytest.mark.firmware
-def test_builds_alongside_every_other_feature():
+def test_builds_alongside_every_other_feature(tmp_path):
+    import os
+    import kit_patch_amp as kit
+    import m4cache
+    import patch_microlooper_build
     env = {f: '1' for m in MODS for f in features.flags(m)}
-    _, on = built(env)
-    assert {'bpm', 'breathing_line', 'long_press', 'more_snapshots', 'tap_color'} <= set(on)
+    stock = os.environ.get('HX_STOMP_HXF')
+    if not stock:
+        pytest.skip('HX_STOMP_HXF is not set')
+    # The new audio feature has an explicit metadata phase before M4 wiring.
+    # Exercise all features on that real model base, as build.py does.
+    base = m4cache.nam_base(stock, str(tmp_path))
+    data, _ = kit.load_l6ia_from_any(base)
+    data, _ = patch_microlooper_build.prepare_metadata(data, dsp_cost=1000, log=lambda _: None)
+    _, on = pm.menu_entries(lambda n: kit.get_entry_swapped(data, n), env=env)
+    assert {'bpm', 'breathing_line', 'long_press', 'microlooper', 'more_snapshots', 'tap_color'} <= {
+        features.name(feature) for feature in on}

@@ -12,6 +12,8 @@
 
 </div>
 
+> **Atmosphere development fork:** this fork adds the Atmosphere stereo micro looper and a shared effect declaration interface. Tape tap capture and playback have been verified on an HX Stomp through RAM testing. Held overdub, other modes, stereo separation, and DSP/resource measurements remain pending. See the [Atmosphere build and hardware status](docs/building.md#development-atmosphere-build) and [effect interface design](docs/effect-interface.md).
+
 <a href="https://wisemandenny.github.io/hxtra/web/#recovery"><img src="docs/assets/safe.svg" alt="100% safe for your HX Stomp: HXtra never touches the bootloader, so the stock firmware can always go back on." width="100%"></a>
 
 <table>

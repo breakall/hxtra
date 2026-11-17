@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """NAM A2 Lite's kernel: up to three blocks at once, each with its own capture.
 
-usage: nam_multi.py [model.nam] [-o out.asm] [--slots 2|3] [--staging b2|b3] [--no-tone | --mid-sweep] [--effects] [--check]
+usage: nam_multi.py [model.nam] [-o out.asm] [--slots 1|2|3] [--staging b2|b3] [--no-tone | --mid-sweep] [--effects] [--check]
 
 --mid-sweep: the ten-knob build's tone stack (Bass 150 Hz shelf, Mid a peak at Mid Freq with Q,
 Treble a 2.5 kHz peak, High Cut). --effects: the HX Effects 3.80.0's User IR store.
@@ -97,7 +97,7 @@ J = dict(J_TYPE=0, J_READY=1, J_ROW=2, J_CHAIN=3, J_FLAG=4, J_CP=5, J_N=6)
 SIGCHK_N = 64                     # the kernel's model-check period (nam_multi_kernel.asm .equ)
 P = dict(P_SLOT=12, P_SEEN=13, P_MET=14, P_PHASE=15, P_SIGN=18)   # P_PHASE: the Polarity knob (patch_amp
 # pid 15); P_SIGN: calls to the model's next check (16, 17: the meter test images')
-FAR_D = {2: 41, 3: 17}            # with 3 slots the d = 17 rings go to SDRAM too, to fit
+FAR_D = {1: 41, 2: 41, 3: 17}            # with 3 slots the d = 17 rings go to SDRAM too, to fit
 # DM rings: the smallest far layers' rings (up to DM_LAYERS of them) go instead into the
 # instance's own DM block above the stock words (I0 + 0x92, even, to I0 + dm_words): no DMA
 # staging for them. The stock graph carves that block from the slot's DM budget per the
@@ -1449,6 +1449,101 @@ class KernelCheck:
                     worst=max(c for _, c in self.rig.cycles), timeout=getattr(self, "timeout_cycles", None))
 
 
+
+class SingleKernelCheck(KernelCheck):
+    """Single-slot profile: exercise one owner and a competing/replacement block.
+
+    Reuses the actual DMA rig, model/reference player and bit-exact output
+    assertions; does not pretend the two-owner suite fits a one-slot image.
+    """
+    STEPS = ("silence_fixed_point", "single_load", "single_play", "single_change",
+             "single_polarity", "single_invalid", "single_takeover", "single_recreated",
+             "single_timeout", "busy_channel", "cycle_budget", "capture_replaced")
+
+    def single_load(self):
+        self.A = self.rig.inst("A", 0)
+        self.A.knobs(model=1)
+        self.start(self.A, self.w, self.sig("A1", 32), "single A")
+        rep = self.rig.rep()
+        if rep[REPW["R_CLAIMS"]] != 1 or rep[REPW["R_LOADS"]] != 1:
+            raise CheckFailed("single A did not claim and load exactly one slot")
+
+    def single_play(self):
+        for _ in range(self.nblk):
+            self.play(self.A, "single A")
+        if max(abs(ssim.b2f(v)) for v in self.A.player.words[:16 * self.nblk]) < 1e-3:
+            raise CheckFailed("single-slot test signal is too quiet")
+
+    def single_change(self):
+        self.A.knobs(model=7, drive=0.62, vol=0.7, eq=(0.3, 0.7, 0.45, 0.9))
+        self.start(self.A, self.w3, self.sig("A7", 32), "single model change")
+        for _ in range(20):
+            self.play(self.A, "single changed A")
+
+    def single_polarity(self):
+        for polarity in (1, ssim.f2b(1.0), 0):
+            self.A.knobs(polarity=polarity)
+            self.play(self.A, f"single polarity {polarity:#x}", 3)
+
+    def single_invalid(self):
+        self.A.knobs(model=5.0)
+        self.A.pipe.cut()
+        for k in range(20):
+            self.expect(self.A, self.sig("invalid", 24)[k], f"single cab IR {k}", None)
+        self.A.knobs(model=0)
+        for k in range(4):
+            self.expect(self.A, self.zero, f"single model zero {k}", None)
+        self.A.knobs(model=1)
+        self.start(self.A, self.w, self.sig("Areturn", 12), "single model returns")
+        self.play(self.A, "single returned A", 4)
+
+    def single_takeover(self):
+        self.B = self.rig.inst("B", 1)
+        self.B.knobs(model=3, drive=0.5, vol=0.5, eq=(0.5, 0.5, 0.5, 0.5))
+        # While A is scheduled, B must not steal its sole slot or alter audio.
+        for k in range(4):
+            self.play(self.A, "single occupied A")
+            block = self.sig("overflow", 4)[k]
+            if self.B.call(block, f"single overflow {k}") != block:
+                raise CheckFailed("single overflow did not pass input through")
+            if self.rig.sim.rd(self.B.i0 + P["P_SLOT"]):
+                raise CheckFailed("overflow block claimed the occupied slot")
+        old_slot = self.rig.sim.rd(self.A.i0 + P["P_SLOT"])
+        self.start(self.B, self.w2, self.sig("B3", 16), "single B replaces removed A")
+        if self.rig.sim.rd(self.B.i0 + P["P_SLOT"]) != old_slot:
+            raise CheckFailed("single replacement did not reuse the released slot")
+        self.play(self.B, "single replacement B", 6)
+
+    def single_recreated(self):
+        # Same instance address after graph/model recreation must initialize
+        # its owner state again rather than read the old capture's rings.
+        for k in range(145):
+            self.rig.sim.wr(self.B.i0 + k, 0)
+        self.rig.sim.wr(self.B.i0 + 3, 1)
+        self.B.pipe = Pipe()
+        self.B.knobs(drive=0.5, vol=0.5, model=3, eq=(0.5, 0.5, 0.5, 0.5))
+        self.start(self.B, self.w2, self.sig("recreated B", 8), "single recreated B")
+        self.play(self.B, "single recreated B", 4)
+
+    def single_timeout(self):
+        r = self.rig
+        before = r.rep()[REPW["R_TIMEOUTS"]]
+        r.dma.mode = "stall"
+        got = self.B.call(self.zero, "single stalled DMA")
+        r.dma.mode = "ok"
+        if got != self.zero or r.rep()[REPW["R_TIMEOUTS"]] != before + 1:
+            raise CheckFailed("single DMA timeout was not silent/countable")
+        if r.sim.rd(DMAC0) != 0 or r.dma.active:
+            raise CheckFailed("single timeout left its DMA channel running")
+        self.timeout_cycles = r.cycles[-1][1]
+        while r.rep()[REPW["R_BACKOFF"]]:
+            if self.B.call(self.zero, "single DMA backoff") != self.zero:
+                raise CheckFailed("single backoff was not silent")
+        self.B.pipe = Pipe()
+        self.start(self.B, self.w2, self.sig("B recovered", 8), "single DMA recovered")
+        self.play(self.B, "single recovered B", 4)
+
+
 def contract_with_dma(placed, blocks=4, **dma):
     """The kit's contract suite (hxkit/conformance.py) with ChainDma on its simulator:
     with the channel modelled, every case runs the model (two instances, each in a
@@ -1465,7 +1560,7 @@ def contract_with_dma(placed, blocks=4, **dma):
 
 
 def check(asm, lay, w, **kw):
-    k = KernelCheck(asm, lay, w, **kw)
+    k = (SingleKernelCheck if lay.slots == 1 else KernelCheck)(asm, lay, w, **kw)
     try:
         k.run()
     except CheckFailed as e:

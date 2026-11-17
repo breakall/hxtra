@@ -11,8 +11,10 @@ usb.inc (inc()), so it is written down here only.
 REGISTER = 0x28e165f0               # (command, &{handler, check, 0}): every stock registration calls it, from a stub
 COUNT = 0x7c                        # it refuses higher numbers
 FREE = (0x13, 0x1d, 0x1f, 0x20, 0x26, 0x2c, 0x36, 0x37, 0x4f, 0x50, 0x51, 0x52, 0x64, 0x65)   # registered by no stock stub
+DIAGNOSTIC_CONTEXT = 0x51          # explicit diagnostic builder only; no automatically discovered feature
 
 COMMANDS = (   # (command, the feature using it or None, what it does)
+    (DIAGNOSTIC_CONTEXT, None, 'reserved for explicit micro-looper context readback diagnostic (src/m4/microlooper_readback.s)'),
     (0x52, 'screen_mirror', 'the frame on the LCD, run-length coded (src/m4/screen_mirror.s)'),
 )
 

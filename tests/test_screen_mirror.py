@@ -618,9 +618,13 @@ def test_an_mp4_has_the_takes_sound_moved_by_its_offset(stomp_render, tmp_path):
     def onset(*more):
         subprocess.run([exe, str(home / 'screen.png'), str(home / 'tracks.json'), str(d / 'out.mp4'), str(home / 'skin.json'), str(home),
                         '--audio', str(d / 'sound.wav'), *more], check=True, capture_output=True, timeout=60)
-        subprocess.run(['afconvert', str(d / 'out.mp4'), str(d / 'back.wav'), '-f', 'WAVE', '-d', 'LEI16@48000'], check=True)
-        with wave.open(str(d / 'back.wav')) as w:
-            back = np.frombuffer(w.readframes(w.getnframes()), np.int16).reshape(-1, w.getnchannels())[:, 0]
+        # macOS writes WAVE_FORMAT_EXTENSIBLE, which wave cannot read before Python 3.12.
+        # AU has a fixed header and keeps the same decoded 16-bit PCM samples.
+        subprocess.run(['afconvert', str(d / 'out.mp4'), str(d / 'back.au'), '-f', 'NeXT', '-d', 'BEI16@48000'], check=True)
+        audio = (d / 'back.au').read_bytes()
+        magic, offset, size, encoding, sample_rate, channels = struct.unpack_from('>6I', audio)
+        assert (magic, encoding, sample_rate) == (0x2e736e64, 3, rate), 'AU, signed 16-bit PCM, 48 kHz'
+        back = np.frombuffer(audio[offset:offset + size], '>i2').reshape(-1, channels)[:, 0]
         return np.argmax(np.abs(back.astype(int)) > 3000) / rate
     assert onset('-0.3') == pytest.approx(0.5, abs=0.03), 'the tone 0.8 s into the sound, which began 0.3 s before the video'
     assert onset('0.2') == pytest.approx(1.0, abs=0.03), 'a sound that began after the first frame, silence before it'

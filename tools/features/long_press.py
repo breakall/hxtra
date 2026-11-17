@@ -47,4 +47,9 @@ def apply(p):
     a = pm.Asm(p.next())
     a.movw_movt(2, hook.stock | 1)
     a.bw(m['lp_event'])
-    hook.to(p.add(a.bytes()))
+    if p.values.get('microlooper', {}).get('HX_MICRO_LOOPER'):
+        # The looper owns transport for its assigned keys; defer the single
+        # handler target so its controller can compose with this lp_event.
+        p.microlooper_input_hook = (hook, hook.stock, m['lp_event'])
+    else:
+        hook.to(p.add(a.bytes()))

@@ -49,4 +49,4 @@ The overlay holds only the sectors that differ from stock, so every other sector
 
 ## Rebuilding the loader
 
-`tools/ramboot/firmware-ramboot.dfu` and `tools/ramboot/ramboot-hook.bin` are kept built, so the page and `hxf_ram.py` need no toolchain. To rebuild them, install `arm-none-eabi-gcc` and run `make -C src/ramboot`. `tests/test_ramrun.py` checks that they match the source whenever the toolchain is installed.
+`tools/ramboot/firmware-ramboot.dfu` and `tools/ramboot/ramboot-hook.bin` are kept built, so the page and `hxf_ram.py` need no toolchain. To reproduce them byte for byte, use [xPack GNU Arm Embedded GCC 10.3.1-2.3](https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/tag/v10.3.1-2.3), including its Newlib runtime, put its `bin` directory first on `PATH`, and run `make -C src/ramboot`. Newer GCC versions generate different bytes. A compiler-only installation, such as Homebrew's `arm-none-eabi-gcc`, lacks the required `nano.specs` and `nosys.specs`. `tests/test_ramrun.py` checks that the built files match the source whenever the toolchain is installed.

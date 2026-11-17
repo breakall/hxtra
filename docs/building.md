@@ -63,3 +63,72 @@ python3 tools/hxf_ram.py run build/HX_Stomp_v3.80.0_HXtra.hxf --stock HX_Stomp_v
 The setup page's **Run from RAM** step does the same in Chrome or Edge. Presets and IRs you change during the run are lost at power-off. [RAM_RUN.md](../RAM_RUN.md) explains how it works and its limits.
 
 Then install it with Line 6 Updater, as the [setup page](https://wisemandenny.github.io/hxtra/web/)'s install step says.
+
+## NAM memory profiles
+
+The build retains three simultaneous NAM workspaces normally, or two with GR.
+Enabling the development Atmosphere does not change that selection or install
+a NAM capacity wrapper. Atmosphere's resident instructions now use a checked external
+DDR2 reservation, leaving NAM's kernel, fixed slots and tables unchanged.
+Stored User IR and capture slots are unaffected. There is no independent normal
+build slot-count override. See the [placement evidence](research/features/microlooper-code-placement.md).
+
+Low-level diagnostic patch functions accept an explicit NAM layout; this does
+not expose another normal firmware configuration. The single-slot kernel has
+reference/simulator coverage for model replacement and DMA recovery. See the
+[implementation plan](microlooper-plan.md) for integration and hardware gates.
+
+## Development Atmosphere build
+
+**Hardware status, 2026-11-17:** build MD5
+`3213fe0d81e632d80bf4fe7e4bf36373` is running from RAM with the Atmosphere
+name and preserved model ID 380. Its DSP bytes match the preceding
+`80fae2525aacd4b9e46ae0f09930f1b1` image, on which the user confirmed Tape
+tap capture and repeating playback. Hardware
+comparisons corrected the UI-context/assignment-manager mix-up, the transport
+parameter-space flag and the bridge's rejection of native DDR2 descriptors.
+Overdub, other modes, stereo separation, timing and resource acceptance remain
+pending. No permanent flash has occurred. See
+[the hardware log](research/features/microlooper-hardware-log.md).
+
+The shared declaration, native initialization, lifecycle controller and external
+ISA code placement are implemented and checked offline. Enable them with
+`HX_MICRO_LOOPER=1`; the build retains the ordinary NAM profile and GR/metronome
+when selected. This does not yet implement the general memory-admission design. The
+feature is default-off and excluded from browser/release selection while hardware
+acceptance remains outstanding. HX Edit support remains deferred.
+
+An explicit `HX_MICRO_LOOPER_DSP_COST` is required because the real DSP cost has
+not been measured. The verification build uses 7500 native units, consuming the
+normal remaining budget in an otherwise empty preset. This is an experimental
+accounting value, not a measured performance figure. Native admission refuses
+unaffordable blocks; visible menu graying remains an on-unit check. There is no
+separate Atmosphere instance-count restriction.
+
+```sh
+HX_MICRO_LOOPER=1 HX_MICRO_LOOPER_DSP_COST=7500 \
+HX_LONG_PRESS=1 HX_GR=1 HX_CLICK=1 \
+  .venv/bin/python build.py /path/to/HX_Stomp_v3.80.0_0x103966115.hxf \
+  -o build/HX_Stomp_v3.80.0_HXtra.hxf
+```
+
+The build writes `build/microlooper-build.json` with the native callbacks, runtime
+manifest verification, resource counts and final HXF MD5. It rejects missing
+controls, wrong slot/PID/default or state mappings, changed native heap setup,
+overlap through external instruction/data aliases, and partition overflow. The
+complete NAM2 + GR + metronome DSP image currently leaves **4 bytes** below the
+512 KiB Entry 2 limit; NAM3 + metronome leaves 3,724 bytes. Atmosphere's external fetch
+timing and native stereo binding still require hardware qualification.
+
+On the device, the model is registered under **Delay > Atmosphere > Atmosphere**,
+with Mode, Length, Modify, Clock and Mix. Assign one ordinary bypass footswitch:
+tap on release captures or resumes listening; hold for 400 ms overdubs during
+playback until release. A hold does not also tap. Captures are RAM-only and
+preset reload starts empty/listening. The controller retains playback across
+switch-mode changes when the DSP instance survives, while cancelling Overdub and
+disarming any held gesture. Tap capture has been confirmed in Tape mode; held overdub and the remaining
+transport/lifecycle cases still require on-unit acceptance.
+
+See [integration evidence](research/features/microlooper-integration.md) for the
+native-code tests and exact remaining hardware checks. No firmware is installed
+by the build command.
