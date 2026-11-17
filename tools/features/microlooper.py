@@ -17,6 +17,6 @@ def apply(p):
     if p.load is None:
         raise SystemExit('Atmosphere needs the complete registered image from build.py')
     models = kit.parse_entry3_full(p.load(3))['models']
-    if not any(model['name'] == patch_microlooper.NAME for model in models):
+    if not {effect.name for effect in patch_microlooper.MODELS} <= {model['name'] for model in models}:
         raise SystemExit('Atmosphere needs its metadata before the M4 build phase')
     microlooper_native.install(p, shared_input_hook=getattr(p, 'microlooper_input_hook', None))

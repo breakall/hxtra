@@ -5,11 +5,11 @@
 @ state: caller-owned, aligned32 bytes, initially zero:
 @   +0/+4 gesture flags/time; +8 block handle; +12 generation;
 @   +16 desired Play; +20 desired Overdub; +24 dirty bits1Play/2Overdub;
-@   +28 initialized. State is per block/assignment, never a singleton.
+@   +28 bound model ID (zero until initialized). State is per block/assignment, never a singleton.
 @ binding: immutable20 bytes {context, write_fn, block, generation, model_id}.
 @ write_fn(context, block, parameter_slot, bool_value) returns0 on success,
 @ nonzero on failure. Slots6/7 are Play/Overdub (not DSP PIDs10/11).
-@ Returns bit0 claimed if model380, bit2 if write failed; non-looper returns0
+@ Returns bit0 claimed for either Atmosphere model, bit2 if write failed; non-looper returns0
 @ without touching state. dirty desired values retry on subsequent polls;
 @ failed Play prevents an Overdub write from overtaking it.
 @ New binding resets gesture/desired states and sends Listen/OverdubOff before
@@ -27,7 +27,7 @@
 .syntax unified
 .thumb
 .include "microlooper_gesture.s"
-.equ ML_MODEL, 380
+.include "microlooper_models.inc"
 .equ ML_PLAY, 6
 .equ ML_OVERDUB, 7
 
@@ -51,14 +51,14 @@ microlooper_binding_update:
     mov r4, r0
     mov r5, r3
     ldr r0, [r5, #16]
-    movw r3, #ML_MODEL
-    cmp r0, r3
+    bl microlooper_is_model
     bne .Lml_unclaimed
     mov r6, r1
     mov r7, r2
     ldr r0, [r4, #28]
-    cmp r0, #0
-    beq .Lml_bind
+    ldr r1, [r5, #16]
+    cmp r0, r1
+    bne .Lml_bind
     ldr r0, [r5, #8]
     ldr r1, [r4, #8]
     cmp r0, r1
@@ -76,8 +76,9 @@ microlooper_binding_update:
     str r0, [r4, #12]
     movs r0, #3
     str r0, [r4, #24]
-    movs r0, #1
+    ldr r0, [r5, #16]
     str r0, [r4, #28]
+    movs r0, #1
     cmp r6, #0
     it ne
     movne r0, #4                  @ a rebind while down must await release
@@ -194,7 +195,9 @@ microlooper_binding_cancel:
     ldr r0, [r4, #28]
     cbz r0, .Lml_cancel_none
     ldr r0, [r5, #16]
-    movw r1, #ML_MODEL
+    bl microlooper_is_model
+    bne .Lml_cancel_none
+    ldr r1, [r4, #28]
     cmp r0, r1
     bne .Lml_cancel_none
     ldr r0, [r5, #8]
@@ -291,8 +294,7 @@ microlooper_native_node_match:
     cmp r0, #0
     blt .Lml_native_no_match
     ldr r0, [sp, #1]
-    movw r1, #ML_MODEL
-    cmp r0, r1
+    bl microlooper_is_model
     bne .Lml_native_no_match
     str r4, [r5]
     movs r0, #1
@@ -306,18 +308,17 @@ microlooper_native_node_match:
 
 @ Inline hook at stock0x28dd11aa, AFTER successful kind1 model-info lookup.
 @ Stock bytes9df82830: ldrb.w r3,[sp,#40]. ID is unaligned word[sp+29].
-@ Skip only model380's node before its latch, colour or bypass is changed.
+@ Skip only Atmosphere's node before its latch, colour or bypass is changed.
 @ Other nodes replay the displaced instruction and follow the original code.
 @ Requires the original dispatch frame; never call this as an ABI function.
 @ This isolated hook is tested against stock code. No feature installs it
 @ until the input, polling and lifecycle paths are wired together.
 .thumb_func
 microlooper_native_bypass_filter:
-    push {r0, r1}
-    ldr r0, [sp, #37]
-    movw r1, #ML_MODEL
-    cmp r0, r1
-    pop {r0, r1}
+    push {r0, r1, r12, lr}
+    ldr r0, [sp, #45]
+    bl microlooper_is_model
+    pop {r0, r1, r12, lr}
     beq .Lml_native_skip_bypass
     ldrb.w r3, [sp, #40]
     ldr pc, =0x28dd11af
@@ -326,7 +327,7 @@ microlooper_native_bypass_filter:
     .ltorg
 
 @ Entry hook at stock0x28e04864, guarded push.w {r4-r9,lr}.
-@ Restricts primary model380 native transport writes to our writer's actual
+@ Restricts primary Atmosphere native transport writes to our writer's actual
 @ return address. No process-global allow flag or cross-thread window.
 @ Other models, settings and secondary-model writes run the original setter.
 @ Native0x28e08454 treats selector-3 as secondary and other selectors as primary.
@@ -359,8 +360,8 @@ microlooper_native_parameter_filter:
     cmp r0, #0
     blt .Lml_parameter_pass
     ldr r4, [sp, #1]
-    movw r5, #ML_MODEL
-    cmp r4, r5
+    mov r0, r4
+    bl microlooper_is_model
     bne .Lml_parameter_pass
     add sp, #60
     pop {r0-r7, lr}
@@ -448,8 +449,7 @@ microlooper_binding_event:
     bne .Lml_event_lp
     ldr r3, [r6, #4]
     ldr r0, [r3, #16]
-    movw r1, #ML_MODEL
-    cmp r0, r1
+    bl microlooper_is_model
     bne .Lml_event_lp
     ldr r7, [r4, #4]
     movs r8, #1
@@ -697,9 +697,9 @@ microlooper_controller_refresh:
     cmp r0, #0
     blt .Lml_refresh_next_id
     ldr r0, [sp, #1]
-    movw r1, #ML_MODEL
-    cmp r0, r1
+    bl microlooper_is_model
     bne .Lml_refresh_next_id
+    str r0, [sp, #96]
     movs r0, #0xff
     strb r0, [sp, #55]
     movs r0, #0
@@ -730,6 +730,10 @@ microlooper_controller_refresh:
 .Lml_refresh_find_active:
     cmp r0, r10
     bne .Lml_refresh_find_next
+    ldr r0, [sp, #96]
+    ldr r1, [r5, #48]
+    cmp r0, r1
+    bne .Lml_refresh_find_next
     str r9, [r5, #40]            @ retained object can move to another grid ID
     str r9, [r5, #8]
     b .Lml_refresh_found
@@ -753,7 +757,7 @@ microlooper_controller_refresh:
     adds r0, #1
     str r0, [r1]
     str r0, [r5, #44]
-    movw r0, #ML_MODEL
+    ldr r0, [sp, #96]
     str r0, [r5, #48]
     movs r0, #0
     str r0, [r5, #52]
@@ -793,7 +797,9 @@ microlooper_controller_refresh:
     cmp r0, #0
     blt .Lml_refresh_retired
     ldr r0, [sp, #1]
-    movw r1, #ML_MODEL
+    bl microlooper_is_model
+    bne .Lml_refresh_retired
+    ldr r1, [r5, #48]
     cmp r0, r1
     bne .Lml_refresh_retired
     ldr r0, [r5, #56]
@@ -1154,8 +1160,7 @@ microlooper_controller_write:
     cmp r0, #0
     blt .Lml_controller_write_refuse
     ldr r0, [sp, #1]
-    movw r1, #ML_MODEL
-    cmp r0, r1
+    bl microlooper_is_model
     bne .Lml_controller_write_wrong
     add sp, #60
     pop {r0-r7, lr}

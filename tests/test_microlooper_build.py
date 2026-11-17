@@ -86,6 +86,18 @@ def test_experimental_cost_has_no_invented_default(monkeypatch, cost):
         build.microlooper_cost('HX_Stomp')
 
 
+def test_mono_cost_can_use_shared_charge_or_separate_measurement(monkeypatch):
+    monkeypatch.setenv('HX_MICRO_LOOPER', '1')
+    monkeypatch.setenv('HX_MICRO_LOOPER_DSP_COST', '2000')
+    monkeypatch.delenv('HX_MICRO_LOOPER_MONO_DSP_COST', raising=False)
+    assert build.microlooper_cost('HX_Stomp', mono=True) == 2000
+    monkeypatch.setenv('HX_MICRO_LOOPER_MONO_DSP_COST', '1600')
+    assert build.microlooper_cost('HX_Stomp', mono=True) == 1600
+    monkeypatch.setenv('HX_MICRO_LOOPER_MONO_DSP_COST', '0')
+    with pytest.raises(SystemExit, match='HX_MICRO_LOOPER_MONO_DSP_COST'):
+        build.microlooper_cost('HX_Stomp', mono=True)
+
+
 @pytest.mark.parametrize('unit', ['HX_Stomp_XL', 'HX_Effects'])
 def test_microlooper_profile_does_not_change_other_devices(monkeypatch, unit):
     monkeypatch.setenv('HX_MICRO_LOOPER', '1')

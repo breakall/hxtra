@@ -178,14 +178,27 @@ def register_model(data, effect, *, dsp_cost, registry_address, log=print):
         raise SystemExit('effect primitive is already hooked')
     src, host = kit.find_model(info, effect.source_model), kit.find_model(info, effect.host_model)
     kit.fx_source_check(e0, src, effect.category, effect.width)
-    if src['meta'].get('displayParamCount') != str(effect.shown):
-        raise ValueError('source display count does not match the declared UI prefix')
     params = effect.native_parameters()
     new_e4, blob, composite = kit.add_model_entry4(
         e4, host['blob_index'], params, effect.primitive, asdict(effect.instance), fx=True)
     drop = tuple(key for key in kit.FX_MODEL_META_DROP if key != 'displayParamCount')
     new_e3, _, _ = kit.add_model_entry3(e3, src, effect.name, effect.display, blob, params, drop_meta=drop)
-    item = kit.find_model(kit.parse_entry3_full(new_e3), effect.name)
+    info = kit.parse_entry3_full(new_e3)
+    item = kit.find_model(info, effect.name)
+    # The source supplies category/width policy; the declaration owns its UI.
+    # Write only the new model's record, leaving the stock source unchanged.
+    new_e3 = bytearray(new_e3)
+    for index in range(item['words'][0]):
+        offset = item['words'][1] + 12 * index
+        key, kind, _ = struct.unpack_from('<3I', new_e3, offset)
+        if info['strings'][key] == 'displayParamCount':
+            if kind != 7:
+                raise ValueError('source display count is not a native string record')
+            struct.pack_into('<I', new_e3, offset+8, info['strings'].index(str(effect.shown)))
+            break
+    else:
+        raise ValueError('source has no native display count record')
+    new_e3 = bytes(new_e3)
     if kit.pmap_slots_without_param(new_e4, blob, item['params']):
         raise ValueError('parameter map contains undeclared slots')
     new_e0, _, _, _ = kit.add_model_entry0(

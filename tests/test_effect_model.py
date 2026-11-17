@@ -52,7 +52,7 @@ def test_callback_registry_distinguishes_reset_from_teardown():
     callbacks = native.Callbacks('init', 'control', 'process', reset='reset', teardown='teardown')
     effect = replace(EFFECT, callbacks=callbacks)
     symbols = dict(init=0xe0000, control=0xe0010, process=0xe0020, reset=0xe0030, teardown=0xe0040)
-    assert effect.registry(symbols) == [0x12e, 0xe0000, 0xe0040, 0xe0030, 0xe0010, 0xe0020, 199, 0]
+    assert effect.registry(symbols) == [0x12e, 0xe0000, 0xe0040, 0xe0030, 0xe0010, 0xe0020, 163, 0]
     with pytest.raises(KeyError):
         effect.registry({})
     with pytest.raises(ValueError, match='null'):

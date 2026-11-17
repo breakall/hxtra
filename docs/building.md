@@ -80,33 +80,69 @@ reference/simulator coverage for model replacement and DMA recovery. See the
 
 ## Development Atmosphere build
 
-**Hardware status, 2026-11-17:** build MD5
-`3213fe0d81e632d80bf4fe7e4bf36373` is running from RAM with the Atmosphere
-name and preserved model ID 380. Its DSP bytes match the preceding
-`80fae2525aacd4b9e46ae0f09930f1b1` image, on which the user confirmed Tape
-tap capture and repeating playback. Hardware
+**Hardware status, 2026-11-17:** the clean mono/stereo build has MD5
+`ba4e9a12c9b6dab551be6326b2f70c94`. Atmosphere has separate native mono and stereo
+models. Mono is ID 381 (`HD2_AtmosphereMono`); stereo retains ID 380
+(`HD2_AtmosphereStereo`) so existing presets keep their identity. The timing
+prototype ran on the unit; the final clean RAM upload currently awaits a power
+cycle after a temporary loader reconnect failure. Its complete DSP boot entry
+is identical to the measured candidate. Internal
+hot-code placement and exact compute changes previously reduced the stereo
+core's largest observed call from 69.8% to 14.0% of the audio-block interval.
+The user previously confirmed
+Tape capture, repeating playback, held overdub/release, replacement capture,
+Mix and Stretch controls on the pre-optimization image. Independent audio and
+state comparisons preserve that algorithm. Hardware
 comparisons corrected the UI-context/assignment-manager mix-up, the transport
 parameter-space flag and the bridge's rejection of native DDR2 descriptors.
-Overdub, other modes, stereo separation, timing and resource acceptance remain
-pending. No permanent flash has occurred. See
+Envelope listening checks, stereo separation, broader timing/resource and
+lifecycle acceptance remain pending. The budgets below are experimental hardware-
+derived charges, not exhaustive timing or release qualification. No permanent flash has occurred. See
 [the hardware log](research/features/microlooper-hardware-log.md).
 
-The shared declaration, native initialization, lifecycle controller and external
-ISA code placement are implemented and checked offline. Enable them with
+The shared declaration, native initialization, lifecycle controller and split
+internal/external ISA placement are implemented and checked offline. Enable them with
 `HX_MICRO_LOOPER=1`; the build retains the ordinary NAM profile and GR/metronome
 when selected. This does not yet implement the general memory-admission design. The
 feature is default-off and excluded from browser/release selection while hardware
 acceptance remains outstanding. HX Edit support remains deferred.
 
-An explicit `HX_MICRO_LOOPER_DSP_COST` is required because the real DSP cost has
-not been measured. The verification build uses 7500 native units, consuming the
-normal remaining budget in an otherwise empty preset. This is an experimental
-accounting value, not a measured performance figure. Native admission refuses
-unaffordable blocks; visible menu graying remains an on-unit check. There is no
-separate Atmosphere instance-count restriction.
+Both variants share timing/capture/control code. Mono processes one native
+16-word audio buffer and keeps 24,000 history words (96,000 bytes), while stereo
+processes two planes and keeps 48,000 words (192,000 bytes). Capture duration and
+Clock behavior are identical. The native framework handles mono routing. Both
+use 163 private DM words; no private interleave buffer remains. These allocations
+belong to active effect instances; the shared executable is resident in the build.
+
+An explicit `HX_MICRO_LOOPER_DSP_COST` is still required. Set
+`HX_MICRO_LOOPER_MONO_DSP_COST` to give mono its separately measured charge;
+omitting it uses the explicit stereo charge for both widths. For the current
+image with the compressor gain-reduction meter enabled (`HX_GR=1`, ordinary
+NAM2 profile), the sample loop and its helpers reside in internal code space:
+
+| Variant | Native DSP charge | Largest observed processing call | Loop history |
+| --- | ---: | ---: | ---: |
+| Atmosphere Mono | **1700 (17%)** | 19,774/150,000 cycles, **13.18%** | 24,000 words / 96,000 bytes |
+| Atmosphere (stereo) | **2000 (20%)** | 24,184/150,000 cycles, **16.12%** | 48,000 words / 192,000 bytes |
+
+The mono maximum covers isolated and mixed-preset sweeps; stereo was measured
+with the same stock neighbors. Mono uses about 18% less DSP than the shared
+stereo path in these sweeps, not half: timing and control work remains shared.
+The shared stereo path is slower than the preceding dedicated stereo core's
+14.0% peak, but stays below its 20% charge. Both charges allow headroom above the
+sampled maximum and cover all modes, which can change during playback.
+
+Without the compressor meter, the unchanged NAM3 profile fits only the helpers
+internally. That placement needs a separate timing qualification for this shared
+mono/stereo kernel; do not apply the NAM2 charges to it. The preceding stereo-only
+image's 32% helper-layout charge is historical evidence in the
+[hardware log](research/features/microlooper-hardware-log.md#internal-hot-code-optimization).
+NAM capacity without Atmosphere is unchanged. The active preset's actual blocks
+still determine native DSP admission; there is no separate Atmosphere instance
+count restriction. General memory admission remains separate work.
 
 ```sh
-HX_MICRO_LOOPER=1 HX_MICRO_LOOPER_DSP_COST=7500 \
+HX_MICRO_LOOPER=1 HX_MICRO_LOOPER_DSP_COST=2000 HX_MICRO_LOOPER_MONO_DSP_COST=1700 \
 HX_LONG_PRESS=1 HX_GR=1 HX_CLICK=1 \
   .venv/bin/python build.py /path/to/HX_Stomp_v3.80.0_0x103966115.hxf \
   -o build/HX_Stomp_v3.80.0_HXtra.hxf
@@ -116,18 +152,33 @@ The build writes `build/microlooper-build.json` with the native callbacks, runti
 manifest verification, resource counts and final HXF MD5. It rejects missing
 controls, wrong slot/PID/default or state mappings, changed native heap setup,
 overlap through external instruction/data aliases, and partition overflow. The
-complete NAM2 + GR + metronome DSP image currently leaves **40 bytes** below the
-512 KiB Entry 2 limit; NAM3 + metronome leaves 3,724 bytes. Atmosphere's external fetch
-timing and native stereo binding still require hardware qualification.
+complete NAM2 + compressor meter + metronome DSP image currently leaves **224 bytes** below the
+512 KiB Entry 2 limit. Broader shared-load,
+audio cleanliness and native stereo acceptance still require hardware qualification.
 
-On the device, the model is registered under **Delay > Atmosphere > Atmosphere**,
-with Mode, Length, Modify, Clock and Mix. Assign one ordinary bypass footswitch:
+Before a RAM comparison, verify the actual built image:
+
+```sh
+.venv/bin/python tools/verify_atmosphere_candidate.py \
+  build/HX_Stomp_v3.80.0_HXtra.hxf --report build/microlooper-build.json
+```
+
+The gate checks archive integrity, partitions, native metadata and callbacks,
+private allocation, physical code/data aliases, unchanged NAM/native neighbors,
+and emitted audio code against the independent C++ reference. It takes about
+three seconds locally. `--allocation-only` takes under a second and explicitly
+skips callback/audio execution. Neither mode establishes hardware timing.
+
+On the device, both models are registered under **Delay > Atmosphere**, named
+**Atmosphere Mono** and **Atmosphere** (stereo), with Mode, Length, Modify, Clock
+and Mix. Assign one ordinary bypass footswitch:
 tap on release captures or resumes listening; hold for 400 ms overdubs during
 playback until release. A hold does not also tap. Captures are RAM-only and
 preset reload starts empty/listening. The controller retains playback across
 switch-mode changes when the DSP instance survives, while cancelling Overdub and
-disarming any held gesture. Tap capture has been confirmed in Tape mode; held overdub and the remaining
-transport/lifecycle cases still require on-unit acceptance.
+disarming any held gesture. Tape tap capture and held overdub/release have been
+confirmed by listening; the remaining transport/lifecycle cases still require
+on-unit acceptance.
 
 See [integration evidence](research/features/microlooper-integration.md) for the
 native-code tests and exact remaining hardware checks. No firmware is installed

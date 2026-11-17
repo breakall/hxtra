@@ -16,9 +16,10 @@ Amp > NAM > NAM A2 Lite, ten knobs: Input, Treble, Output, Polarity, Bass,
 Mid, Model, Mid Freq, Q, High Cut (on the HX Effects: Distortion > Mono). The XL and HX Effects builds
 have not run on those units. See STEPS.
 
-HX_MICRO_LOOPER=1 adds the development stereo Atmosphere in external DSP memory,
+HX_MICRO_LOOPER=1 adds mono and stereo Atmosphere in external DSP memory,
 preserving the same NAM profile as a build without Atmosphere support.
-It requires an explicit HX_MICRO_LOOPER_DSP_COST; hardware validation and cost
+It requires an explicit HX_MICRO_LOOPER_DSP_COST; HX_MICRO_LOOPER_MONO_DSP_COST
+can set a separately measured mono charge. Hardware validation and cost
 measurement remain separate. See docs/building.md.
 
 Steps:
@@ -81,19 +82,20 @@ def kernel(unit, gr=None):
     return KERNEL[unit] + (GR_SLOTS if gr and unit == "HX_Stomp" else [])
 
 
-def microlooper_cost(unit):
+def microlooper_cost(unit, *, mono=False):
     """Require an explicit experimental native cost until device profiling."""
     if not os.environ.get('HX_MICRO_LOOPER'):
         return None
     if unit != 'HX_Stomp':
         raise SystemExit('HX_MICRO_LOOPER currently targets HX Stomp only')
-    raw = os.environ.get('HX_MICRO_LOOPER_DSP_COST', '')
+    variable = 'HX_MICRO_LOOPER_MONO_DSP_COST' if mono else 'HX_MICRO_LOOPER_DSP_COST'
+    raw = os.environ.get(variable, os.environ.get('HX_MICRO_LOOPER_DSP_COST', '') if mono else '')
     try:
         cost = int(raw)
     except ValueError:
-        raise SystemExit('HX_MICRO_LOOPER_DSP_COST must be an explicit integer in 1..7500')
+        raise SystemExit(f'{variable} must be an explicit integer in 1..7500')
     if not 1 <= cost <= 7500:
-        raise SystemExit('HX_MICRO_LOOPER_DSP_COST must be an explicit integer in 1..7500')
+        raise SystemExit(f'{variable} must be an explicit integer in 1..7500')
     return cost
 
 
@@ -118,6 +120,7 @@ def main():
                  "The patch is made for those files only.")
     unit = STOCK_MD5[md5]
     micro_cost = microlooper_cost(unit)
+    micro_mono_cost = microlooper_cost(unit, mono=True)
     print(f"stock firmware: {unit.replace('_', ' ')} 3.80.0")
     splash = os.path.abspath(argv[argv.index("--splash") + 1]) if "--splash" in argv else None
     splash_text = argv[argv.index("--splash-text") + 1] if "--splash-text" in argv else None
@@ -152,7 +155,8 @@ def main():
         src = dst
     base = src
     if micro_cost is not None:
-        run(py, 'tools/patch_microlooper_build.py', 'metadata', base, titled, '--dsp-cost', str(micro_cost))
+        run(py, 'tools/patch_microlooper_build.py', 'metadata', base, titled,
+            '--dsp-cost', str(micro_cost), '--mono-dsp-cost', str(micro_mono_cost))
         os.replace(titled, base)
     if unit == "HX_Stomp":
         run(py, "tools/patch_menu.py", base, titled, "--cwd", os.getcwd())

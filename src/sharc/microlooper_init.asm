@@ -4,7 +4,7 @@
 // Control: R4=PID, R8=value-word pointer, R12=the same instance descriptor.
 // The native scalar C environment supplies M7=-1,M14=1, L7=0 and the frame at I6.
 // Only C-volatile R0/R1/I4/I12 and arithmetic flags are used. I6/I7 restored.
-// Private DM is199 words; no private PM, shared storage or SDRAM clear.
+// Private DM is163 words; no private PM, shared storage or SDRAM clear.
 // Clearing marker20 causes the audio core's bounded fresh-instance reset.
 // Transport10/11 start low; normal parameters5..9 arrive through model controls.
 // Before first processing (marker20=0), discard transport control delivery.
@@ -13,9 +13,15 @@
 // First processing therefore observes low transport and arms the first gesture.
 .section pm MICROLOOPER_INIT_PM_BASE
 MICROLOOPER_INIT:
+    R1 = 2;
+    JUMP microlooper_init_channels;
+MICROLOOPER_INIT_MONO:
+    R1 = 1;
+microlooper_init_channels:
     I4 = R4;
     R0 = DM(0,I4);
     I4 = R0;
+    DM(14,I4) = R1;
     R0 = 0;
     DM(10,I4) = R0;
     DM(11,I4) = R0;

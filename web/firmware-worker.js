@@ -105,6 +105,7 @@ var SOURCES = [
   "tools/sharc/microlooper_bridge.py",
   "tools/sharc/microlooper_init.py",
   "tools/sharc/microlooper_placement.py",
+  "tools/sharc/microlooper_split.py",
   "tools/sharc/microlooper_visa.py",
   "tools/sharc/nam_lite.py",
   "tools/sharc/nam_multi.py",

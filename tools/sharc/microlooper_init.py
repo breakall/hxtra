@@ -30,12 +30,12 @@ def assemble(base):
     return sasm.assemble(source, ASM.name)
 
 
-def registry(primitive, process, base):
+def registry(primitive, process, base, *, effect=EFFECT):
     """Descriptor fields; graph allocation sizes must independently agree."""
-    if primitive != EFFECT.primitive:
+    if primitive != effect.primitive:
         raise ValueError('primitive ID does not match the Atmosphere declaration')
     _, symbols = assemble(base)
-    return EFFECT.registry({**symbols, EFFECT.callbacks.process: process})
+    return effect.registry({**symbols, effect.callbacks.process: process})
 
 
 def instructions():

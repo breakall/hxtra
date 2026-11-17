@@ -4,14 +4,16 @@ import struct
 import pytest
 
 import microlooper_native as microlooper
+from microlooper_definition import MODELS
 
 CODE, STATE, BINDING, WRITE = 0x28e60000, 0x28600000, 0x28600100, 0x28f90000
 CTX, BLOCK = 0x12340000, 73
 
 
 class Binding:
-    def __init__(self, m4emu):
-        code, self.symbols = m4emu.assemble('src/m4/microlooper.s', [], {})
+    def __init__(self, m4emu, model=380):
+        self.model = model
+        code, self.symbols = m4emu.assemble('src/m4/microlooper.s', [], {}, inc={'microlooper_models.inc': microlooper.asm_include()})
         self.m = m4emu.M4(code, CODE)
         self.writes, self.fail = [], False
 
@@ -21,7 +23,8 @@ class Binding:
         self.m.stub(WRITE, write)
         self.bind()
 
-    def bind(self, block=BLOCK, generation=1, model=380, at=BINDING):
+    def bind(self, block=BLOCK, generation=1, model=None, at=BINDING):
+        model = self.model if model is None else model
         self.m.write(at, struct.pack('<5I', CTX, WRITE | 1, block, generation, model))
 
     def update(self, pressed=False, now=0, state=STATE, binding=BINDING):
@@ -37,8 +40,9 @@ class Binding:
         self.writes.clear()
 
 
-def test_tap_capture_hold_overdub_release_and_tap_resume_listening(m4emu):
-    b = Binding(m4emu); b.ready()
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_tap_capture_hold_overdub_release_and_tap_resume_listening(m4emu, model):
+    b = Binding(m4emu, model); b.ready()
     assert b.update(True, 10) == 1
     assert b.writes == []
     assert b.update(False, 20) == 1
@@ -59,15 +63,17 @@ def test_tap_capture_hold_overdub_release_and_tap_resume_listening(m4emu):
     assert b.writes == [(CTX, BLOCK, 6, 0)]
 
 
-def test_listening_hold_has_no_capture_or_overdub_and_duplicate_release_has_no_tap(m4emu):
-    b = Binding(m4emu); b.ready()
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_listening_hold_has_no_capture_or_overdub_and_duplicate_release_has_no_tap(m4emu, model):
+    b = Binding(m4emu, model); b.ready()
     b.update(True, 10); b.update(True, 400010); b.update(False, 400020)
     b.update(False, 400021)
     assert b.writes == []
 
 
-def test_new_binding_initializes_listen_and_stops_overdub_without_capturing(m4emu):
-    b = Binding(m4emu); b.ready()
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_new_binding_initializes_listen_and_stops_overdub_without_capturing(m4emu, model):
+    b = Binding(m4emu, model); b.ready()
     b.update(True, 10); b.update(False, 20)
     b.update(True, 30); b.update(True, 400030)
     b.writes.clear()
@@ -79,8 +85,9 @@ def test_new_binding_initializes_listen_and_stops_overdub_without_capturing(m4em
     assert b.writes == []
 
 
-def test_initial_pressed_level_is_not_a_restored_capture_command(m4emu):
-    b = Binding(m4emu)
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_initial_pressed_level_is_not_a_restored_capture_command(m4emu, model):
+    b = Binding(m4emu, model)
     b.update(True, 20)
     assert b.writes == [(CTX, BLOCK, 6, 0), (CTX, BLOCK, 7, 0)]
     b.writes.clear()
@@ -88,17 +95,20 @@ def test_initial_pressed_level_is_not_a_restored_capture_command(m4emu):
     assert b.writes == []
 
 
-def test_non_microlooper_binding_does_not_consume_event_or_modify_state(m4emu):
-    b = Binding(m4emu)
-    b.bind(model=555)
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+@pytest.mark.parametrize('foreign_model', [147, 148, 555])
+def test_non_microlooper_binding_does_not_consume_event_or_modify_state(m4emu, model, foreign_model):
+    b = Binding(m4emu, model)
+    b.bind(model=foreign_model)
     before = b.m.read(STATE, 32)
     assert b.update(True, 20) == 0
     assert b.m.read(STATE, 32) == before
     assert b.writes == []
 
 
-def test_failed_writes_retry_without_overtaking_or_losing_tap(m4emu):
-    b = Binding(m4emu); b.ready()
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_failed_writes_retry_without_overtaking_or_losing_tap(m4emu, model):
+    b = Binding(m4emu, model); b.ready()
     b.update(True, 10)
     b.fail = True
     assert b.update(False, 20) == 5
@@ -112,8 +122,9 @@ def test_failed_writes_retry_without_overtaking_or_losing_tap(m4emu):
     assert b.writes == []
 
 
-def test_initial_listen_write_failure_prevents_overdub_write_until_retry(m4emu):
-    b = Binding(m4emu); b.fail = True
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_initial_listen_write_failure_prevents_overdub_write_until_retry(m4emu, model):
+    b = Binding(m4emu, model); b.fail = True
     assert b.update(False, 0) == 5
     assert b.writes == [(CTX, BLOCK, 6, 0)]
     b.fail = False
@@ -121,8 +132,9 @@ def test_initial_listen_write_failure_prevents_overdub_write_until_retry(m4emu):
     assert b.writes == [(CTX, BLOCK, 6, 0), (CTX, BLOCK, 6, 0), (CTX, BLOCK, 7, 0)]
 
 
-def test_cancel_stops_overdub_clears_state_and_cannot_synthesize_a_tap(m4emu):
-    b = Binding(m4emu); b.ready()
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_cancel_stops_overdub_clears_state_and_cannot_synthesize_a_tap(m4emu, model):
+    b = Binding(m4emu, model); b.ready()
     b.update(True, 10); b.update(False, 20)
     b.update(True, 30); b.update(True, 400030)
     b.writes.clear()
@@ -133,8 +145,9 @@ def test_cancel_stops_overdub_clears_state_and_cannot_synthesize_a_tap(m4emu):
     assert b.writes == [(CTX, BLOCK, 6, 0), (CTX, BLOCK, 7, 0)]
 
 
-def test_cancel_ignores_stale_generation_and_can_retry_sender_failure(m4emu):
-    b = Binding(m4emu); b.ready()
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_cancel_ignores_stale_generation_and_can_retry_sender_failure(m4emu, model):
+    b = Binding(m4emu, model); b.ready()
     b.update(True, 10); b.update(False, 20)
     before = b.m.read(STATE, 32)
     b.bind(generation=2)
@@ -148,8 +161,9 @@ def test_cancel_ignores_stale_generation_and_can_retry_sender_failure(m4emu):
     assert b.m.read(STATE, 32) == bytes(32)
 
 
-def test_two_block_bindings_keep_independent_transport_and_sentinels(m4emu):
-    b = Binding(m4emu)
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_two_block_bindings_keep_independent_transport_and_sentinels(m4emu, model):
+    b = Binding(m4emu, model)
     other_state, other_binding = STATE + 36, BINDING + 24
     b.m.write(STATE - 4, b'LEFT' + bytes(32) + b'MIDL' + bytes(32) + b'RGHT')
     b.bind(block=74, generation=2, at=other_binding)
@@ -166,8 +180,9 @@ def test_two_block_bindings_keep_independent_transport_and_sentinels(m4emu):
     assert b.m.read(other_state + 32, 4) == b'RGHT'
 
 
-def test_wraparound_time_is_forwarded_to_gesture_without_a_long_press(m4emu):
-    b = Binding(m4emu); b.ready()
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_wraparound_time_is_forwarded_to_gesture_without_a_long_press(m4emu, model):
+    b = Binding(m4emu, model); b.ready()
     b.update(True, 0xffffff00); b.update(False, 0xffffff80)
     assert b.writes == [(CTX, BLOCK, 6, 1)]
     b.update(True, 0xfffffff0); b.update(True, 0xfffffff0 + 400000)
@@ -222,7 +237,7 @@ def test_native_writer_rejects_non_transport_slots_without_calling_firmware(m4em
     assert b.m.call(CODE + b.symbols['microlooper_native_write'], CTX, 1, 5, 1) == 0xfffffffd
 
 
-@pytest.mark.parametrize('kind,model,status,match', [(1, 380, 0, True), (1, 555, 0, False),
+@pytest.mark.parametrize('kind,model,status,match', [(1, 380, 0, True), (1, 381, 0, True), (1, 555, 0, False),
                                                   (1, 380, -1, False), (2, 380, 0, False),
                                                   (3, 380, 0, False)])
 def test_native_node_filter_is_selective_and_never_rewrites_assignments(m4emu, kind, model, status, match):
@@ -316,7 +331,7 @@ def test_stock_tick_listener_shares_queued_dispatch_and_preserves_native_tick(m4
 
 
 @pytest.mark.firmware
-@pytest.mark.parametrize('first_model,expected_blocks', [(380, [6]), (555, [5, 6])])
+@pytest.mark.parametrize('first_model,expected_blocks', [(380, [6]), (381, [6]), (147, [5, 6]), (555, [5, 6])])
 def test_native_bypass_filter_skips_only_looper_node_in_actual_dispatch(m4emu, first_model, expected_blocks):
     import patch_menu as pm
     from firmware import reader, stock_e0
@@ -368,7 +383,7 @@ def test_native_bypass_filter_skips_only_looper_node_in_actual_dispatch(m4emu, f
     b.m.stub(0x28e0f884, bypass)
     b.m.call(native, obj, 0)
     assert sent == [(CTX, block, 1, 1) for block in expected_blocks]
-    assert b.m.read(first + 32, 4) == (b'\x01RGB' if first_model == 380 else b'\x00NEW')
+    assert b.m.read(first + 32, 4) == (b'\x01RGB' if first_model in (380, 381) else b'\x00NEW')
     assert b.m.read(second + 32, 4) == b'\x00NEW'
 
 
@@ -382,7 +397,9 @@ def install_parameter_filter(b, read):
 
 
 @pytest.mark.firmware
-@pytest.mark.parametrize('model,selector,index,allowed', [(380, -2, 5, False), (380, -2, 6, False),
+@pytest.mark.parametrize('model,selector,index,allowed', [(147, -2, 5, True), (381, -2, 5, False), (381, -2, 6, False),
+                                                        (381, -2, 4, True), (381, -3, 5, True),
+                                                        (380, -2, 5, False), (380, -2, 6, False),
                                                         (380, 380, 5, False), (555, -2, 5, True),
                                                         (380, -2, 4, True), (380, -3, 5, True)])
 def test_native_parameter_filter_blocks_external_transport_only(m4emu, model, selector, index, allowed):
@@ -499,11 +516,11 @@ class Router(Binding):
     EVENT, OBJ, ROUTE = 0x28601000, 0x28602000, BINDING + 0x400
     STOCK, LONG_PRESS = WRITE + 0x100, 0x28e80000
 
-    def __init__(self, m4emu):
+    def __init__(self, m4emu, model=380):
         import features
         import patch_menu as pm
         import setting_ids
-        super().__init__(m4emu)
+        super().__init__(m4emu, model)
         self.ids = setting_ids.by_name()
         lp_code, lp_symbols = m4emu.assemble('src/m4/long_press.s', features.load(), self.ids)
         self.m.load(self.LONG_PRESS, lp_code)
@@ -547,8 +564,9 @@ class Router(Binding):
         return self.m.call(CODE + self.symbols['microlooper_binding_tick'], self.EVENT, self.OBJ, self.ROUTE)
 
 
-def test_per_binding_router_keeps_other_blocks_press_release_and_suppresses_one_second_hold(m4emu):
-    b = Router(m4emu)
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_per_binding_router_keeps_other_blocks_press_release_and_suppresses_one_second_hold(m4emu, model):
+    b = Router(m4emu, model)
     assert b.event(1, 10) == b.event(2, 20) == b.event(3, 21) == 1
     assert b.writes == [(CTX, BLOCK, 6, 1)]
     b.writes.clear()
@@ -564,8 +582,9 @@ def test_per_binding_router_keeps_other_blocks_press_release_and_suppresses_one_
     assert b.m.calls(0x28d96588) == []
 
 
-def test_per_binding_router_preserves_actual_long_press_behavior_for_another_switch(m4emu):
-    b = Router(m4emu)
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_per_binding_router_preserves_actual_long_press_behavior_for_another_switch(m4emu, model):
+    b = Router(m4emu, model)
     assert b.event(1, 10, code=13) == 0
     assert b.stock_events == []  # real lp_event holds its press back
     assert b.event(5, 1000010, code=13) == 0
@@ -575,8 +594,9 @@ def test_per_binding_router_preserves_actual_long_press_behavior_for_another_swi
     assert b.writes == []
 
 
-def test_tick_retries_failed_transport_without_replaying_other_blocks(m4emu):
-    b = Router(m4emu)
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_tick_retries_failed_transport_without_replaying_other_blocks(m4emu, model):
+    b = Router(m4emu, model)
     b.event(1, 10); b.fail = True
     assert b.event(2, 20) == 5
     assert b.tick(21) == 5
@@ -586,7 +606,40 @@ def test_tick_retries_failed_transport_without_replaying_other_blocks(m4emu):
     assert b.stock_events == [(1, 12, 1), (1, 12, 2)]
 
 
-def test_non_tick_does_not_poll_or_send_parameters(m4emu):
-    b = Router(m4emu)
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_non_tick_does_not_poll_or_send_parameters(m4emu, model):
+    b = Router(m4emu, model)
     assert b.tick(100, source=1) == 0
     assert b.writes == []
+
+
+@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
+def test_replacing_variant_with_reused_handle_and_generation_resets_transport(m4emu, model):
+    b = Binding(m4emu, model); b.ready()
+    b.update(True, 10); b.update(False, 20)
+    b.update(True, 30); b.update(True, 400030)
+    b.writes.clear()
+    replacement = next(effect.preset_id for effect in MODELS if effect.preset_id != model)
+    b.bind(model=replacement)
+    assert b.cancel() == 0, 'old variant cannot cancel its replacement'
+    assert b.writes == []
+    b.update(True, 400040)
+    assert b.writes == [(CTX, BLOCK, 6, 0), (CTX, BLOCK, 7, 0)]
+    assert b.m.u32(STATE + 28) == replacement
+    b.writes.clear(); b.update(False, 400050)
+    assert b.writes == [], 'release from the old variant cannot capture'
+
+
+@pytest.mark.parametrize('model,target', [(380, 0x28dd1186), (381, 0x28dd1186), (555, 0x28dd11ae)])
+def test_inline_bypass_identity_check_preserves_native_live_registers_and_return(m4emu, model, target):
+    b = Binding(m4emu)
+    b.m.write(m4emu.STACK_TOP + 29, struct.pack('<I', model))
+    b.m.u8(m4emu.STACK_TOP + 40, 0x6b)
+    b.m.reg('r12', 0x12345678)
+    observed = []
+    for destination in (0x28dd1186, 0x28dd11ae):
+        b.m.stub(destination, lambda m, at=destination: observed.append(
+            (at, m.reg('r0'), m.reg('r1'), m.reg('r2'), m.reg('r3'), m.reg('r12'), m.reg('lr'))))
+    b.m.call(CODE + b.symbols['microlooper_native_bypass_filter'], 12, 34, 56, 78)
+    assert observed == [(target, 12, 34, 56, 78 if model in (380, 381) else 0x6b,
+                         0x12345678, m4emu.RETURN | 1)]

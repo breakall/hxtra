@@ -5,7 +5,8 @@ import pytest
 
 import patch_amp as kit
 import patch_microlooper as ml
-from microlooper_definition import EFFECT
+from microlooper_definition import EFFECT, MONO_EFFECT, MODELS
+from effect_model import register_model
 from firmware import stock, reader
 
 
@@ -25,25 +26,28 @@ def test_requires_explicit_usable_native_cost(cost):
         ml.register_model(b'', dsp_cost=cost)
 
 
-@pytest.fixture(scope='module')
-def registered():
+@pytest.fixture(scope='module', params=MODELS, ids=lambda effect: effect.name)
+def registered(request):
     # 1000 is a structural test value, NOT a measured or advertised DSP cost.
     original = stock()
-    return original, ml.register_model(original, dsp_cost=1000, log=lambda _: None)
+    return original, register_model(original, request.param, dsp_cost=1000,
+                                    registry_address=ml.REGISTRY_ADDRESSES[request.param.name],
+                                    log=lambda _: None)
 
 
 @pytest.mark.firmware
-def test_registers_stereo_graph_and_unchanged_stock_models_with_native_cost(registered):
+def test_registers_native_graph_and_unchanged_stock_models_with_native_cost(registered):
     original, (out, result) = registered
+    effect = next(effect for effect in MODELS if effect.preset_id == result['preset_id'])
     before, after = table1(original), table1(out)
     assert after[:-1] == before
-    assert after[-1][1:] == (380, 0, 1000)
-    assert result['preset_id'] == ml.PRESET_ID
+    assert after[-1][1:] == (effect.preset_id, 0, 1000)
+    assert result['preset_id'] == effect.preset_id
     e3 = kit.get_entry_swapped(out, 3)
     info = kit.parse_entry3_full(e3)
-    model = kit.find_model(info, ml.NAME)
+    model = kit.find_model(info, effect.name)
     assert [(p['name'], p['slot'], p['type']) for p in model['params']] == [
-        (p.name, p.slot, p.type) for p in EFFECT.parameters]
+        (p.name, p.slot, p.type) for p in effect.parameters]
     assert model['meta']['displayParamCount'] == '5'
     e0 = kit.get_entry_swapped(out, 0)
     segs = kit._parse_e0_segments(e0)
@@ -54,7 +58,7 @@ def test_registers_stereo_graph_and_unchanged_stock_models_with_native_cost(regi
     rows = [read(ui_table + 44*i, 44) for i in range(ui_count)]
     row = next(row for row in rows if struct.unpack_from('<I', row)[0] == model['words'][2])
     assert struct.unpack_from('<3I', row, 24) == (5, 7, 7)
-    assert result['instance']['sdram_words'] == 48000
+    assert result['instance'] == dict(dm_words=163, pm_words=0, sdram_words=24000*effect.width)
     e4 = kit.get_entry_swapped(out, 4)
     words = struct.unpack(f'<{len(e4)//4}I', e4)
     b0 = kit.entry4_blob.blob(words, 0)
@@ -62,8 +66,8 @@ def test_registers_stereo_graph_and_unchanged_stock_models_with_native_cost(regi
     member = comp['members'][1]
     # Composite root fields do not describe primitive inputs: even the stock
     # stereo host reports root0-in/2-out. The audio member must be2-in/2-out.
-    assert (member['n_in'], member['n_out']) == (2, 2)
-    assert member['type_id'] == ml.PRIM[0]
+    assert (member['n_in'], member['n_out']) == (effect.width, effect.width)
+    assert member['type_id'] == effect.primitive
     assert not kit.pmap_slots_without_param(e4, result['blob'], model['params'])
     # Kernel registry bytes unchanged by metadata registration.
     assert kit._scan_e2_injected(kit.l6ia.swap32(kit.get_entry_swapped(out, 2)))[1] == \
@@ -72,19 +76,20 @@ def test_registers_stereo_graph_and_unchanged_stock_models_with_native_cost(regi
 
 @pytest.mark.firmware
 def test_registration_is_not_repeated_or_allowed_to_overwrite_model_id(registered):
-    original, (out, _) = registered
+    original, (out, result) = registered
+    effect = next(effect for effect in MODELS if effect.preset_id == result['preset_id'])
     with pytest.raises(SystemExit, match='already registered'):
-        ml.register_model(out, dsp_cost=1000)
+        register_model(out, effect, dsp_cost=1000, registry_address=ml.REGISTRY_ADDRESSES[effect.name])
     e0 = bytearray(kit.get_entry_swapped(original, 0))
     segs = kit._parse_e0_segments(e0)
     a = kit.e0_device(segs)
     read = reader(e0)
     base = struct.unpack('<I', read(a.TAB1_BASE_PTRS[0], 4))[0]
     # Occupy the reserved ID in a fixture; the existing generic writer must refuse it.
-    struct.pack_into('<H', e0, kit._e0_vaddr_to_foff(segs, base + 4), ml.PRESET_ID)
+    struct.pack_into('<H', e0, kit._e0_vaddr_to_foff(segs, base + 4), effect.preset_id)
     changed, _, _ = kit.l6ia.rebuild_archive(original, {0: bytes(e0)})
     with pytest.raises(SystemExit, match='already-used'):
-        ml.register_model(changed, dsp_cost=1000, log=lambda _: None)
+        register_model(changed, effect, dsp_cost=1000, registry_address=ml.REGISTRY_ADDRESSES[effect.name], log=lambda _: None)
 
 
 @pytest.mark.firmware
@@ -154,3 +159,33 @@ def test_native_total_removal_restores_looper_admission(m4emu, registered):
     assert m.u32(preset + 0xa88) == 5500
     assert m.call(budget, 0, preset, 0, descriptor) == 0
     assert m.read(result, 1) == b'\1'
+
+
+@pytest.mark.firmware
+def test_family_registration_preserves_both_stock_sources_and_distinct_model_prices():
+    from effect_model import verify_model
+    original = stock()
+    costs = {EFFECT.name: 2000, MONO_EFFECT.name: 1200}
+    out, results = ml.register_models(original, dsp_costs=costs, log=lambda _: None)
+    before_rows = table1(original)
+    assert not {380, 381} & {row[1] for row in before_rows}
+    assert table1(out)[:-2] == before_rows
+    assert not {147, 148} & {row[1] for row in table1(out)}
+    assert [r['preset_id'] for r in results] == [380, 381]
+    before = kit.parse_entry3_full(kit.get_entry_swapped(original, 3))
+    after = kit.parse_entry3_full(kit.get_entry_swapped(out, 3))
+    for effect in MODELS:
+        model, cost = verify_model(out, effect)
+        assert cost == costs[effect.name]
+        assert model['meta']['subcategory'] == ('mono' if effect.width == 1 else 'stereo')
+        assert kit.find_model(before, effect.source_model)['meta'] == kit.find_model(after, effect.source_model)['meta']
+    assert MONO_EFFECT.parameters is EFFECT.parameters
+    assert MONO_EFFECT.callbacks.init != EFFECT.callbacks.init
+    assert MONO_EFFECT.callbacks.control == EFFECT.callbacks.control
+    assert MONO_EFFECT.callbacks.process == EFFECT.callbacks.process
+
+
+@pytest.mark.parametrize('costs', [{}, {EFFECT.name: 1000}, {EFFECT.name: 1000, MONO_EFFECT.name: None}])
+def test_family_requires_explicit_costs_for_both_native_widths(costs):
+    with pytest.raises(ValueError, match='cost'):
+        ml.register_models(b'', dsp_costs=costs)

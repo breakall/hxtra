@@ -5,6 +5,7 @@ import struct
 import pytest
 
 import microlooper_native as native
+from microlooper_definition import MODELS
 import patch_menu as pm
 from firmware import reader, stock_e0, stock_entry
 
@@ -14,10 +15,11 @@ EVENT, STOCK, LP, THREAD = 0x28f50000, 0x28f90000, 0x28f90010, 0x28f70000
 
 
 class Controller:
-    def __init__(self, api, installed=None):
+    def __init__(self, api, installed=None, model=380):
         self.api = api
+        self.model = model
         if installed is None:
-            code, self.sym = api.assemble(native.MODULE, [], {})
+            code, self.sym = api.assemble(native.MODULE, [], {}, inc={'microlooper_models.inc': native.asm_include()})
             self.base = CODE
             self.m = api.M4(code, CODE)
         else:
@@ -106,8 +108,8 @@ class Controller:
         self.lp_events.append(m.read(m.reg('r0'), 8))
         self.stock(m)
 
-    def add(self, block=1, model=380, obj=None):
-        self.models[block] = model
+    def add(self, block=1, model=None, obj=None):
+        self.models[block] = self.model if model is None else model
         slot = block - 1 if block <= 8 else block - 3
         obj = 0x28600000 + slot * 0x1000 if obj is None else obj
         self.m.u32(DSP + 0x14 + slot * 0x54, slot)
@@ -141,9 +143,9 @@ class Controller:
                 if self.m.u32(self.at('microlooper_controller_routes') + 80 * n + 56)]
 
 
-@pytest.fixture
-def controller(m4emu):
-    return Controller(m4emu)
+@pytest.fixture(params=[effect.preset_id for effect in MODELS])
+def controller(m4emu, request):
+    return Controller(m4emu, model=request.param)
 
 
 def test_discovers_deduplicates_and_tap_hold_routes_all_micro_instances(controller):
@@ -295,7 +297,7 @@ def test_failed_eligibility_cancel_retries_without_old_hold_or_capture(controlle
 
 def test_actual_native_bool_setter_recurses_graph_lock_then_restores_outer_owner(m4emu):
     read = reader(stock_e0())
-    code, symbols = m4emu.assemble(native.MODULE, [], {})
+    code, symbols = m4emu.assemble(native.MODULE, [], {}, inc={'microlooper_models.inc': native.asm_include()})
     m = m4emu.M4(code, CODE)
     for address, size in ((0x100003b0, 0x460), (0x100034b0, 0x2c),
                           (0x28e24bb0, 8), (0x28e24c00, 8), (0x28e07844, 48),
@@ -395,7 +397,7 @@ def test_actual_native_move_retargets_owned_transport_without_stopping_playback(
 
 
 def test_manifest_version_matches_assembled_source(m4emu):
-    code, symbols = m4emu.assemble(native.MODULE, [], {})
+    code, symbols = m4emu.assemble(native.MODULE, [], {}, inc={'microlooper_models.inc': native.asm_include()})
     assert hashlib.sha256(code).hexdigest() == native.MODULE_SHA256
     assert {name: symbols[name] for name in native.LAYOUT} == native.LAYOUT
 
@@ -645,7 +647,7 @@ def test_input_resolves_assignment_manager_separately_from_ui_context(controller
 def test_native_transport_writer_uses_effect_parameter_space(m4emu, slot):
     """The real native getter must validate an effect control, not a special field."""
     read = reader(stock_e0())
-    code, symbols = m4emu.assemble(native.MODULE, [], {})
+    code, symbols = m4emu.assemble(native.MODULE, [], {}, inc={'microlooper_models.inc': native.asm_include()})
     m = m4emu.M4(code, CODE)
     for address, size in ((0x28e04864, 0x120), (0x28e02040, 0xf0),
                           (0x28e07f80, 0x108), (0x28dfbb0c, 0x13c)):
@@ -682,3 +684,20 @@ def test_native_transport_writer_uses_effect_parameter_space(m4emu, slot):
     m.stub(0x28e0bc50, lambda m: m.reg('r0', 1))
     assert m.call(CODE + symbols['microlooper_native_write'], 0, 1, slot, 1) == 0
     assert writes == [(slot-1, b'\x00', b'\x01\x01')]
+
+
+def test_variant_replacement_with_retained_native_object_and_link_rebinds_model_identity(controller):
+    c = controller; c.add(); c.assign(0, [1]); c.tick()
+    c.key(1); c.key(2); c.key(1); c.now = 400000; c.tick()
+    c.writes.clear()
+    replacement = next(effect.preset_id for effect in MODELS if effect.preset_id != c.model)
+    c.models[1] = replacement
+    c.tick()
+    assert c.writes == [(1, 6, 0), (1, 7, 0)]
+    route, = c.routes()
+    assert struct.unpack_from('<I', route, 28)[0] == replacement
+    assert struct.unpack_from('<I', route, 48)[0] == replacement
+    c.writes.clear(); c.key(2)
+    assert c.writes == []
+    c.key(1); c.key(2)
+    assert c.writes == [(1, 6, 1)]

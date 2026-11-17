@@ -60,6 +60,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import msgpack                                    # noqa: E402
 import hx_dfu_reboot as hxu                       # noqa: E402  (UsbLink, Stream; not modified)
+from microlooper_definition import MODELS as ATMOSPHERE_MODELS  # noqa: E402
 
 EDITOR = dict(local=0x1000, remote=0x03ED, svc=6)
 LIBRARIAN = dict(local=0x1001, remote=0x03EF, svc=2)
@@ -80,8 +81,8 @@ BLOCK_TYPE = 6
 SECTION_ORDER = [0, 1, 3, 4, 2, 5, 6, 7, 10]   # offset-table order after the map offset
 
 # Block "kind" (body key 9) for models whose kind can't be found in the current preset.
-# 572 (Kit Probe, amp category 12) and 147 (NAM) are amps without cab: 17 (seen on the unit).
-KNOWN_KIND = {572: 17, 147: 17}
+# Kit Probe and legacy NAM147 are amps without cab. Atmosphere uses native delay shapes.
+KNOWN_KIND = {572: 17, 147: 17, **{effect.preset_id: 8 for effect in ATMOSPHERE_MODELS}}
 # Kinds whose parameter list carries one more value than its key-3 count says (delay and
 # reverb 8, 9, 15, 16: every such block in the 122 factory presets; the rest list as many as
 # they count). A block written with key 3 = len(values) for these is dropped by the unit,
@@ -89,7 +90,15 @@ KNOWN_KIND = {572: 17, 147: 17}
 SHORT_COUNT_KINDS = {8, 9, 15, 16}
 # Parameter values to use when neither the preset nor the factory presets have the model:
 # 572 "Kit Probe" has one parameter; the unit's edit buffer held [0.5] on 2026-10-28.
-KNOWN_PARAMS = {572: [0.5]}
+# Native delays append one false value after the declared controls. This keeps
+# Atmosphere's seven direct parameters plus the native count8/direct-count7 shape.
+KNOWN_PARAMS = {
+    572: [0.5],
+    **{effect.preset_id: [bool(p.default) if p.type == 1 else
+                         int(p.default) if p.type == 2 else float(p.default)
+                         for p in effect.parameters] + [False]
+       for effect in ATMOSPHERE_MODELS},
+}
 
 
 class HxError(Exception):

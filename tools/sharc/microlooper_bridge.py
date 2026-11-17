@@ -17,9 +17,7 @@ from microlooper_definition import EFFECT
 
 ASM = Path(__file__).resolve().parents[2] / 'src/sharc/microlooper_bridge.asm'
 NATIVE_STEREO_ABI_VERIFIED = False
-BUFFER_BEGIN = audio.STATE_WORDS
-BUFFER_WORDS = 32
-SPILL_BEGIN = BUFFER_BEGIN + BUFFER_WORDS
+SPILL_BEGIN = audio.STATE_WORDS
 STATE_WORDS = EFFECT.instance.dm_words
 ENTRY = EFFECT.callbacks.process
 
@@ -44,7 +42,11 @@ class Bridge:
     """Encoded bridge plus actual audio core; test caller supplies planar data."""
     def __init__(self, state=0xb3000, ring=0x400000, call_record=0xb6000,
                  instance=0x99f80, sim=None, core_base=0xe3000,
-                 bridge_base=0xe3500):
+                 bridge_base=0xe3500, channels=2):
+        if channels not in (1, 2):
+            raise ValueError("channel count must be1 or2")
+        self.channels = channels
+        self.ring_words = audio.RING_FRAMES * channels
         self.state, self.ring = state, ring
         self.call_record, self.instance = call_record, instance
         self.sim = sim or ssim.Sim()
@@ -58,10 +60,11 @@ class Bridge:
         # These native header fields are observed conditions, not an invented
         # initialization function. The actual firmware must establish them.
         self.sim.wr(state, 16)
-        self.sim.wr(state + 2, 2)
+        self.sim.wr(state + 2, channels)
+        self.sim.wr(state + audio.CHANNELS, channels)
         self.sim.wr(call_record + 2, instance)
         self.sim.wr(instance + 6, ring)
-        self.sim.wr(instance + 7, ring + audio.RING_WORDS)
+        self.sim.wr(instance + 7, ring + self.ring_words)
         self.params(mode=1, length=.5, modify=.75, clock=1, mix=.5,
                     play=False, overdub=False)
 
@@ -71,16 +74,19 @@ class Bridge:
             self.sim.wr(self.state + audio.PARAMS[name], word)
 
     def block(self, samples=None, inplace=False):
-        samples = [(0., 0.)] * 16 if samples is None else samples
+        samples = ([0.] * 16 if self.channels == 1 else [(0., 0.)] * 16) if samples is None else samples
         if len(samples) != 16:
-            raise ValueError('a DSP block is exactly16 stereo frames')
+            raise ValueError('a DSP block is exactly16 frames')
         src, dst = 0xb8000, 0xb8000 if inplace else 0xb8100
-        for frame, (left, right) in enumerate(samples):
-            self.sim.wr(src + frame, ssim.f2b(left))
-            self.sim.wr(src + 16 + frame, ssim.f2b(right))
+        for frame, sample in enumerate(samples):
+            values = (sample,) if self.channels == 1 else sample
+            for channel, value in enumerate(values):
+                self.sim.wr(src + 16*channel + frame, ssim.f2b(value))
         for code, value in ((0x10, self.state), (0x11, src), (0x12, dst),
                             (0x13, self.call_record)):
             self.sim.set(code, value)
         self.sim.call(self.symbols[ENTRY], limit=100_000)
+        if self.channels == 1:
+            return [ssim.b2f(self.sim.rd(dst + frame)) for frame in range(16)]
         return [(ssim.b2f(self.sim.rd(dst + frame)),
                  ssim.b2f(self.sim.rd(dst + 16 + frame))) for frame in range(16)]

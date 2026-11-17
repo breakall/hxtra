@@ -9,6 +9,7 @@ import m4cache
 import patch_comp
 import patch_click
 import patch_microlooper_build as build
+from microlooper_definition import MODELS
 from sharc import microlooper as layout
 from sharc import microlooper_adapter as loader
 from sharc import microlooper_bridge as bridge
@@ -43,11 +44,14 @@ def linked(profile_image):
 @pytest.mark.firmware
 def test_full_profile_links_exact_private_callbacks_with_unchanged_other_entries(profile_image, linked):
     image, report = linked
-    assert report['section_instructions'] == [audio.instructions(), bridge.instructions(), callbacks.instructions()]
+    cold, hot, shim, init = report['section_instructions']
+    assert cold+hot == audio.instructions()+(report['code_split']['region'] == 'sample-loop')
+    assert (shim, init) == (bridge.instructions(), callbacks.instructions())
     assert report['entry2_bytes'] <= layout.ENTRY2_INJECTION_LIMIT
-    assert report['code_ldr_records'] == 1
+    assert report['code_ldr_records'] == 2
+    assert [section['kind'] for section in report['executable_sections']] == ['external_isa48', 'internal_isa48']
     assert report['entry2_remaining_bytes'] == layout.ENTRY2_INJECTION_LIMIT-report['entry2_bytes']
-    assert report['private_dm_words'] == 199 and report['private_pm_words'] == 0
+    assert report['private_dm_words'] == 163 and report['private_pm_words'] == 0
     assert report['private_sdram_words'] == 48000 and report['nam_slots'] in (2, 3)
     assert not report['hardware_verified'] and not report['native_dsp_cost_measured']
     for index in range(len(kit.l6ia.parse(image))):
@@ -55,17 +59,26 @@ def test_full_profile_links_exact_private_callbacks_with_unchanged_other_entries
             assert kit.get_entry_swapped(image, index) == kit.get_entry_swapped(profile_image, index)
     raw = kit.l6ia.swap32(kit.get_entry_swapped(image, 2))
     actual = [loader.ldr_word(raw, build.model.PRIM[1]+i) for i in range(8)]
-    assert actual == [0x012e, report['init_entry'], 0, 0, report['control_entry'], report['process_entry'], 199, 0]
+    assert actual == [0x012e, report['init_entry'], 0, 0, report['control_entry'], report['process_entry'], 163, 0]
+    assert len(report['models']) == 2
+    for effect, row in zip(MODELS, report['models']):
+        assert row['effect'] == effect.describe()
+        assert row['declared_dsp_cost'] == 1000
+        assert row['private_sdram_words'] == 24000*effect.width
+        actual = [loader.ldr_word(raw, row['registry_address']+i) for i in range(8)]
+        assert actual == [effect.primitive, row['init_entry'], 0, 0,
+                          row['control_entry'], row['process_entry'], 163, 0]
     with pytest.raises(ValueError, match='already installed'):
         build.link_dsp(image, log=lambda _: None, require_controls=False)
 
 
 @pytest.mark.firmware
 @pytest.mark.parametrize('mode', [0, 1, 2])
-def test_encoded_final_image_process_matches_the_actual_core(linked, mode):
+@pytest.mark.parametrize('channels', [1, 2])
+def test_encoded_final_image_process_matches_the_actual_core(linked, mode, channels):
     image, report = linked
     # Execute bytes replayed from the final image, at the actual linked entry.
-    runner = bridge.Bridge(core_base=report['pm_base'], bridge_base=report['process_entry'])
+    runner = bridge.Bridge(core_base=report['pm_base'], bridge_base=report['process_entry'], channels=channels)
     raw = kit.l6ia.swap32(kit.get_entry_swapped(image, 2))
     runner.sim.pm.clear()
     runner.sim.pm.update(layout.pm_words(loader.ldr_blocks(raw)))
@@ -74,8 +87,8 @@ def test_encoded_final_image_process_matches_the_actual_core(linked, mode):
                 if tag == 4 and address == storage['data_begin'])
     packed = struct.pack(f'<{len(data)}I', *data)
     runner.sim.pm.update((report['pm_base']+i, int.from_bytes(packed[6*i:6*i+6], 'little'))
-                         for i in range(report['encoded_instructions']))
-    reference = audio.Audio()
+                         for i in range(storage['instructions']))
+    reference = audio.Audio(channels=channels)
     settings = dict(mode=mode, length=.4, modify=.6, clock=1., mix=.75)
     runner.params(**settings)
     reference.params(**settings)
@@ -84,6 +97,8 @@ def test_encoded_final_image_process_matches_the_actual_core(linked, mode):
             runner.params(play=True, overdub=block == 5)
             reference.params(play=True, overdub=block == 5)
         samples = [(k/64., -(k+1)/128.) for k in range(block*16, (block+1)*16)]
+        if channels == 1:
+            samples = [frame[0] for frame in samples]
         assert runner.block(samples) == reference.block(samples)
 
 
@@ -98,20 +113,22 @@ def test_linker_rejects_code_collision_before_overwriting(profile_image, linked)
 
 
 @pytest.mark.firmware
-def test_final_external_callbacks_run_through_original_native_c_call(linked):
+@pytest.mark.parametrize('channels', [1, 2])
+def test_final_external_callbacks_run_through_original_native_c_call(linked, channels):
     import microlooper_visa as visa
     import ssim
     image, report = linked
+    row = next(row for row in report['models'] if row['effect']['width'] == channels)
     raw = kit.l6ia.swap32(kit.get_entry_swapped(image, 2))
     sim, short = visa.load(raw, parcel_order='high-first', external_parcel_order='low-first')
     data = next(payload for tag, count, address, payload in loader.ldr_blocks(raw)
                 if tag == 4 and address == report['code_storage']['data_begin'])
     packed = struct.pack(f'<{len(data)}I', *data)
     sim.pm.update((report['pm_base']+i, int.from_bytes(packed[6*i:6*i+6], 'little'))
-                  for i in range(report['encoded_instructions']))
+                  for i in range(report['code_storage']['instructions']))
     state, descriptor, value = 0xb3000, 0xb6000, 0xb7000
     frame, stack = 0xc6e98, 0xc6d98
-    for offset in range(199):
+    for offset in range(163):
         sim.wr(state+offset, 0x7fc00000)
     sim.wr(descriptor, state)
     sim.wr(0x400000, 0xdeadbeef)
@@ -119,8 +136,9 @@ def test_final_external_callbacks_run_through_original_native_c_call(linked):
                            (0x2e, 1), (0x37, 0), (4, descriptor)):
         sim.set(register, word)
     sim.u[ssim.U_MODE1] = ssim.CBUFEN | 0x10000
-    callbacks.invoke_from_stock_c_caller(sim, short, report['init_entry'])
+    callbacks.invoke_from_stock_c_caller(sim, short, row['init_entry'])
     assert [sim.rd(state+i) for i in (10, 11, 20)] == [0, 0, 0]
+    assert sim.rd(state+14) == channels
     assert sim.rd(state+9) == 0x7fc00000
     assert sim.rd(0x400000) == 0xdeadbeef
     for live in (False, True):

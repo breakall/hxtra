@@ -298,3 +298,306 @@ Full default repository suite with the Stomp fixture and pinned RAM-loader
 toolchain: **2,067 passed, 73 skipped in 394.80 seconds**. The skipped cases
 are the separately selected upstream NAM suite and unavailable XL/Effects
 fixtures. Hardware qualification remains as recorded above.
+
+## Hardware DSP budget measurement
+
+**[verified on unit, 2026-11-17]** The upstream merge through `2c1685f`, local
+commit `fb2d42c`, passes RAM boot and native USB readback. In the clean merged
+image `80fdde920530867e7ec4e43412231bc6`, the user confirms Tape capture/repeat,
+held overdub and release without stopping, return to listening and replacement
+capture, Mix endpoints and blend, and the requested Stretch/Modify/return-mode
+check. These are listening checks, not stereo-isolation or timing certification.
+
+The 7500 cost displayed as 75 and filled the native admission allowance even
+with Atmosphere alone. It was a deliberate isolation value, not measured CPU use.
+The DSP meter displays the declared model-table charge; it is not a profiler.
+
+**[verified offline and on unit]** A temporary diagnostic replaces the existing
+GR program in its existing 594-instruction PM allocation and uses its existing
+336-word DM allocation for a timer and frame export. The Atmosphere process
+registry points to that timer, which calls the exact linked production planar
+bridge/core in DDR2. All external Atmosphere instructions, native instance
+allocations, model graphs and NAM bytes remain unchanged. Other GR-wrapped cores
+forward directly to native routines in this diagnostic. It is not a GR-meter
+qualification. Encoded execution checks validate the timer, original bridge/core,
+muted output and coherent telemetry before RAM loading.
+
+`EMUCLK` is sampled immediately before and after the bridge call. The delta
+includes call/timestamp overhead and interruptions during the call; no optimistic
+overhead subtraction is made. The start-to-start interval is a median 150,000
+cycles per 16-frame block. An automatic 320-case schedule varies all modes,
+eight Modify zones, four Length values including a very short splice, Overdub,
+and five clock settings, with alternating stereo test input and silence.
+The first 256 cases exercise the fastest clock; 64 additional cases exercise
+the four slower clocks. The timer retains each case's and the entire run's
+maximum across all calls, including calls between USB readbacks. The original
+controller is not used to drive this synthetic transport test.
+
+| Mode | Largest observed call, cycles | Fraction of 150,000-cycle interval |
+| --- | ---: | ---: |
+| Envelope | 66,021 | 44.0% |
+| Tape | 60,824 | 40.5% |
+| Stretch | 104,689 | 69.8% |
+
+The run reached 329,824 calls and produced 1,845 coherent host snapshots.
+Sampled start-to-start intervals ranged from 148,506 to 152,370 cycles; no
+stretched callback interval was observed in those snapshots. This is not an
+audio dropout test. A matched baseline calls only a return stub, outside which
+all diagnostics/graph operations remain present: 206 snapshots show 78.48%
+median native idle (21.52% total load), and the timed stub's median is 11 cycles.
+Audio-state fields are undefined in that baseline because the audio core does
+not initialize them; they are excluded from its validation.
+
+**[verified on unit: candidate coexistence]** A 7200-unit candidate admitted
+Parametric EQ Stereo (model135, 252 units) and Volume Mono (model261, 35 units):
+7487 declared block units in total, below the native 7500 allowance. The same
+automatic sweep reached 329,823 calls, exported 1,842 coherent snapshots, and
+measured a maximum 104,680-cycle Atmosphere call. Sampled intervals were
+148,034..152,012 cycles, median 150,000. The unit remained responsive. No
+permanent preset or firmware write occurred.
+
+**[experimental budget decision]** Use 7200 units (72%) for this implementation,
+rounding the 69.8% observed maximum upward with approximately 2.2 percentage
+points of additional per-effect allowance, alongside the native admission
+margin. Only 300 units remain for other blocks. This is deliberately based on
+the most demanding mode, not Tape's typical or reduced-clock load. It does not
+admit a simultaneous NAM block. Substantially lower charges need performance
+work and new hardware measurements, not just a cheaper model-table number.
+
+Limitations: this schedule is not an exhaustive upper bound, it does not test
+every arbitrary neighboring effect or external-memory contention pattern, and
+muted synthetic output does not establish audio cleanliness at the admission
+boundary. Long soak, stereo qualification and the remaining native lifecycle
+acceptance checks still apply. Generic build reports do not attach this local
+timing evidence automatically.
+
+Ignored local artifacts are `build/ram-probes/atmosphere_timing.py` and
+`collect_atmosphere_timing.py`, the generated diagnostic images/assembly,
+`atmosphere-chip-timing.json`, `atmosphere-chip-baseline.json`,
+`atmosphere-chip-neighbors.json`, and `atmosphere-timing-summary.json`.
+The pre-profiling edit buffer is backed up as `pre-atmosphere-timing.bin/.json`.
+The clean 7200-unit HXF is `4a9e9ea3d787c765f9c0d48c683b77b8`; only Entry0
+differs from the 7500-unit clean merged image. The full DSP program and all
+model/graph entries are byte-identical; DSP partition headroom remains 40 bytes.
+
+**[verified on unit: clean restore]** The first restore attempt failed to
+enumerate the temporary RAM loader, before the clean image was uploaded. The
+user power-cycled to the normal installed firmware. The retry boots the clean
+7200-unit image successfully, normal editor USB responds, and native readback
+confirms the original Atmosphere-only edit buffer, all controls and footswitch
+assignments restored. The generated profiling code is absent. The loop is empty
+after restart. Targeted model/admission/layout/docs checks: **38 passed in
+0.99 seconds**. No permanent firmware or preset write, commit or push was made
+for this timing task.
+
+## Internal hot-code optimization
+
+**[verified offline and on unit, 2026-11-17]** Delegated work established a
+fast final-image verifier, traced the stock loopers and official ADI cache
+documentation, and produced exact compute candidates. The orchestrator built
+and verified each candidate before serialized RAM-only hardware comparisons.
+The [stock-looper research](atmosphere-stock-looper-optimization.md) shows
+internal native processing and a 32-entry external instruction cache. Live
+`MODE2=0x42000020` has CADIS, EXTCADIS and CAFRZ clear: external caching was
+enabled, not frozen or accidentally disabled. Cache capacity and repeated
+external fetches, rather than a disabled-cache setting, motivated relocation.
+
+The production [split planner](../../../tools/sharc/microlooper_split.py)
+derives the existing free interval after unchanged NAM/GR and before the
+reserved metronome/cold-code region. It reserves those neighbors conservatively
+even when optional features are absent. NAM2 has room for the sample loop and
+helpers; NAM3 has room for wrap/read/interpolation/reconstruction helpers.
+It checks existing loader aliases and NAM runtime claims before using either
+region. No NAM code, slot state or capacity is moved or reduced.
+
+The [compute changes](atmosphere-compute-optimization.md) calculate invariant
+geometry once per callback, keep interpolation values in registers, and take
+exact common-case wrap paths. A final helper extraction moves the repeated
+reconstruction/mix-smoothing work into the same internal region without changing
+operation order. The final core SHA-256 is
+`a349ebf122f6849d5afa92ae7364a66a47d2589c491e125281af7d24aeebc253`:
+1049 instructions, versus1091 originally. NAM2 splits into402 external +648
+internal core instructions; NAM3 into861 external +188 internal. Private
+allocation remains199DM, zeroPM and48,000 SDRAM words per instance.
+
+**[verified offline: candidate gates]**
+[`verify_atmosphere_candidate.py`](../../../tools/verify_atmosphere_candidate.py)
+checks actual image/container integrity, all partition bounds, model/resource
+and callback binding, emitted executable sections, final physical16 aliases,
+unchanged NAM and present GR/metronome neighbors, native heap setup, and bounded
+original native initialization/allocation execution. Its full gate executes
+the actual final code against an independent compiled C++ oracle, with writes
+restricted to the declared instance and buffers. Allocation-only checks take
+about0.7 seconds; full checks about2.7 seconds locally. Hardware timing and audio
+qualification remain separate. An independent review demonstrated an initially
+missed write through a different address-space alias into NAM cold code; final
+physical replay and a regression now reject it. The32 gate regressions also
+exercise graph corruption, callbacks writing beyond private state, bad
+reservation reports, heap/GR/click aliases and changed output instructions.
+
+**[verified on unit: controlled comparisons]** All timings below use the same
+320-case automatic schedule, 16 stereo frames/call and150,000-cycle median
+start interval. The diagnostics are muted and keep per-case and whole-run
+maxima between USB samples; these are sampled measurements, not exhaustive
+upper bounds or listening tests.
+
+| Candidate | Largest call, cycles | Fraction of audio-block interval |
+| --- | ---: | ---: |
+| Original all-external implementation | 104,689 | 69.8% |
+| Original algorithm, internal sample loop | 27,856 | 18.6% |
+| Original algorithm, internal wrap/read helpers | 50,231 | 33.5% |
+| Exact compute changes + internal sample loop | 20,915 | 13.9% |
+| Exact compute changes + internal helpers | 43,272 | 28.8% |
+| Final reconstruction refinement, helper layout | 42,135 | 28.1% |
+| Final source, sample-loop layout with stock neighbors | 21,013 | 14.0% |
+
+The last test adds Atmosphere in the free A7 position of the user's backed-up
+Microcosmos edit buffer. Ordinary stock blocks declare4104 units; its specialized
+kind22 looper (model505) adds528 even while bypassed. Atmosphere2000 brings the
+total to6632 of7500 block units. Clean-firmware native readback confirms8132
+including the fixed1500 base, and retains every block. The run reaches the end of
+the schedule with1911 coherent snapshots, no core error flag, normal callback
+cadence and responsive USB. The maximum Atmosphere call is21,013 cycles. This
+is shared-load timing evidence, not an audio dropout or full NAM-capture test.
+
+**[experimental budget decision]** Charge2000 units (20%) for the GR/NAM2
+sample-loop build, leaving55% of the block allowance for actual neighboring
+effects. Charge3200 (32%) for the smaller helper layout, leaving43%. The final
+NAM3 image's executable bytes and addresses are identical to the measured
+helper-layout candidate; complete NAM3 hardware acceptance remains pending.
+The budgets include headroom above the largest observed call and cover all
+modes. They supersede the72% charge for the former all-external implementation.
+They do not change stored captures or the baseline NAM3/NAM2 slot capacities.
+
+The clean full-feature GR HXF is `c5f45d341bf2a04e47f2cd0d98e691e6`, with280
+Entry2 bytes free. The clean NAM3 HXF is `3f8635abe255d00f7c3ac80b0ff65195`,
+with3964 bytes free. Both actual built images pass the independent emitted-byte
+gate with zero oracle error. Canonical output selects the GR/2000-unit image.
+Final full repository regression: **2122 passed,73 skipped in420.66 seconds**;
+the usual skips are the separately selected upstream NAM suite and absent
+XL/Effects fixtures. Additional candidate checks include153 audio/bridge tests,
+the flat and split reconstruction tests, and20,224 bit-identical frames plus
+1024 direct reconstruction cases comparing complete memory/register/status
+state. All timing images, raw records and preset backups remain ignored local
+artifacts under `build/optimization-probes/`; no firmware image is published.
+
+**[verified on unit: clean optimized restore]** The canonical GR/2000-unit image
+boots successfully from RAM and normal editor USB responds. A clean-image mixed
+preset insertion/removal confirms the native cost above. The original selected
+preset8, `FX:Microcosmos`, is then restored from the pre-test backup; block
+settings and footswitch assignments read back unchanged. No save or permanent
+firmware write is sent. The clean image contains no profiling code. Changes
+remain local for review; this optimization task does not create a commit or push.
+
+## Native mono implementation
+
+2026-11-17. This continuation adds a true mono effect alongside the existing
+stereo identity. Earlier images and the 199-word bridge above are historical.
+
+**[verified offline: model identity and allocation]** Stereo remains preset 380,
+primitive `0x012e`, registry `0x200058`, internal name `HD2_AtmosphereStereo`.
+Mono uses unused preset 381, primitive `0x0100`, registry `0x2000a0`, name
+`HD2_AtmosphereMono`, displayed as **Atmosphere Mono**. Both use 163 private DM
+words and zero private PM words. Mono allocates 24,000 SDRAM words; stereo
+allocates 48,000. Both retain 24,000 frames, so duration and clock behavior match.
+Native constructor replay and final-image verification check both allocations,
+the distinct initializers, and shared processing/control entries. NAM stays 555;
+no NAM code, slot layout or runtime limit changes.
+
+**[verified offline: persisted identity correction]** The timing prototype used
+ID 147, which stock firmware leaves unregistered. Repository history and
+`README.md` show that earlier NAM releases persisted that ID with an amp-shaped
+record. The final mono model instead uses 381, also unregistered in stock, so
+those records cannot resolve to an unrelated delay. Old 147/148 NAM support is
+not changed. This registration-only correction leaves all measured DSP code
+and history allocation unchanged.
+
+**[verified offline: one audio channel]** The common core consumes native planar
+buffers directly. Private word 14 is initialized to 1 for mono or 2 for stereo;
+only native initialization owns it. Mono reads/writes 16 audio words and advances
+one history word per frame. It skips the right-channel capture, interpolation,
+crossfade and overdub arithmetic. Both widths share control/timing calculations.
+The conversion buffer is removed; bridge spills occupy 153..162. The core is 1085
+instructions, bridge 66 and init/control 37: 1188 total, unchanged from the preceding
+stereo-only implementation. Native model metadata provides mono routing; no
+custom input summing is added.
+
+**[verified offline: emitted image and independent reference]** The final gate
+executes both initializers and controls through the stock C caller and replays
+native member allocation. It executes actual final-image processing bytes for
+seven transition/overdub cases per width, 3136 frames each, with zero observed
+sample error against the independent C++ reference. Strict read/write guards
+cover the 16-word mono buffers, 24,000-word history and 163-word private state;
+negative tests reject stereo-sized mono buffers, wrong init width and misbound
+registry/graph declarations. Independent cross-reviews found no actionable
+defects in DSP, native lifecycle/model handling or linker composition.
+
+**[verified on unit: mono width and history]** RAM timing images retain the exact
+external and internal Atmosphere executable bytes and addresses. The diagnostic
+wraps the shared native processing entry, supplies deterministic input, mutes
+output after the measured span, and reuses existing compressor-meter storage.
+Hardware telemetry reports channel count 1 and ring extent 24,000 on every sampled
+mono call. MODE2 is `0x42000020`; cache remains enabled. The callback interval is
+approximately 150,000 cycles for 16 frames, as before. The 320-case sweep includes
+all modes, eight Modify zones, four Length choices, overdub, fastest clock and
+four reduced clocks. Peaks include all callbacks, not only host snapshots.
+
+Mono alone: 1881 snapshots, peak 19,774 cycles (**13.18%**). With the seven stock
+Microcosmos blocks: 1746 snapshots, peak 19,689 cycles (**13.13%**). The latter
+includes the bypassed native looper and preserves the original effects/settings.
+Raw evidence is ignored locally under
+`build/optimization-probes/mono-shared-checked-chip-timing.json` and
+`mono-shared-mixed-chip-timing.json`.
+
+**[verified on unit: shared stereo comparison]** The same mixed-preset sweep
+records 1759 snapshots, channel count 2, ring extent 48,000, and peak 24,184 cycles
+(**16.12%**) in `stereo-shared-mixed-chip-timing.json`. Mono's mixed-preset peak is
+18.6% lower; its isolated maximum is 18.2% below this stereo maximum. Sharing the
+core adds channel branches to stereo, whose earlier dedicated implementation
+peaked at 14.0%. The new stereo path remains below the existing 20% native charge.
+Use 1700 units (**17%**) for mono and 2000 (**20%**) for stereo in this measured
+compressor-meter/NAM2 configuration. These are conservative sampled budgets,
+not exhaustive timing qualification. The NAM3 helper-only placement has offline
+fit/behavior coverage, but this shared kernel has not been timed in that profile;
+the earlier stereo-only 32% result does not qualify it.
+
+**[verified offline: final clean artifact]** The canonical
+`build/HX_Stomp_v3.80.0_HXtra.hxf` has MD5
+`ba4e9a12c9b6dab551be6326b2f70c94`, with mono 1700 and stereo 2000 native charges.
+Every non-M4 archive entry, including the complete DSP boot entry, is identical
+to the verified candidate used for timing. The complete image passes the same
+emitted-byte allocation/audio gate for both widths. Entry 2 is 524,064 bytes,
+leaving 224 below its partition limit. There is no profiling code in this image.
+Kernel source SHA-256 is
+`857a23bdd3b2dec1a4fe4e13f723e4a6a61ddb6e669b46e2b21f63d2b0a43515`.
+
+**[verified offline: measurement harness correction]** A first attempt to repeat
+the sweep after a graph change restarted the diagnostic sequence number. The M4
+readback correctly discarded the new lower sequence until it caught up; the
+unit remained responsive. The corrected probe keeps stream sequence monotonic
+and stores a separate graph-relative sweep origin. This affects diagnostic
+instrumentation only. That incomplete attempt is retained separately and is not
+used as the final timing evidence.
+
+**[verified offline: regression]** The full suite ran 2254 passing tests and 73
+expected skips in 438.87 seconds; one loader reproducibility check failed because
+the shell selected a system ARM compiler missing `nano.specs`. The isolated check
+passes in 0.30 seconds with the project's pinned compiler first on PATH. Thus all
+2255 selected tests pass with the correct toolchain. Skips are the missing XL/
+Effects fixtures and separately selected upstream NAM suites. The initial
+sandboxed launch also failed in Unicorn's native JIT setup; the actual full run
+used the required native execution permissions. No code was changed to bypass
+either environment failure.
+
+After moving the final mono identity to 381, native/model/helper checks pass
+199 tests in 11.53 seconds and both-profile linker/build/final-byte checks pass
+96 tests in 45.15 seconds. The canonical 381 image passes the full emitted-audio
+and allocation gate with archive SHA-256
+`0541567e4c180d0cf1b03dce945c9f7ef7695f90bc7f30469235feef6720631c`.
+
+**[verified on unit: current handoff impediment]** The attempt to replace the
+stereo timing diagnostic with the clean image failed in the temporary RAM
+loader's DFU reconnect, before image upload. Neither normal USB, DFU nor loader
+USB enumerated afterward. A power cycle to the installed firmware was requested;
+clean-image RAM boot and final edit-buffer setup remain pending that recovery.
+This is not a measured looper failure and no permanent firmware write occurred.

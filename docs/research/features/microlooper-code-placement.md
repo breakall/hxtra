@@ -6,6 +6,12 @@ ownership. This proves a bounded resident placement and emitted instruction
 encoding offline; native stereo binding, boot and real-time timing remain
 hardware gates. Status tags follow [the conventions](../conventions.md).
 
+The all-external implementation below is a historical placement proof. The
+current build keeps cold setup/callbacks external and moves the repeated
+processing into proven internal gaps. See the
+[split planner](../../../tools/sharc/microlooper_split.py) and
+[hardware optimization results](microlooper-hardware-log.md#internal-hot-code-optimization).
+
 ## External ISA is supported directly
 
 **[verified offline: manufacturer documentation]** The ADSP-21469 executes

@@ -43,9 +43,10 @@ def test_encoded_kernel_matches_reference_modes_clocks_and_signed_rates(oracle, 
     np.testing.assert_allclose(actual,expected,atol=2e-6,rtol=0)
 
 
-def test_private_storage_guards_and_registers_are_preserved():
-    a=audio.Audio();sim=a.sim
-    sim.wr(a.ring-1,0xdeadbeef);sim.wr(a.ring+audio.RING_WORDS,0xfeedface)
+@pytest.mark.parametrize("channels", [1, 2])
+def test_private_storage_guards_and_registers_are_preserved(channels):
+    a=audio.Audio(channels=channels);sim=a.sim
+    sim.wr(a.ring-1,0xdeadbeef);sim.wr(a.ring+a.ring_words,0xfeedface)
     rng=random.Random(44)
     for r in range(16):sim.setR(r,rng.getrandbits(32));sim.alt[r]=rng.getrandbits(32)
     for c in range(0x10,0x50):sim.set(c, rng.randrange(1,16) if 0x30<=c<0x40 else rng.randrange(0x100000))
@@ -53,10 +54,10 @@ def test_private_storage_guards_and_registers_are_preserved():
     sim.set(0x10,a.state);sim.set(0x11,0xb8000);sim.set(0x12,0xb8100)
     sim.u[ssim.U_MODE1]=0x1608000
     before=([sim.R(r)for r in range(16)],list(sim.alt),[sim.get(c)for c in range(0x10,0x50)],sim.u[ssim.U_MODE1])
-    a.block([(.125,-.25)]*16)
+    a.block([.125]*16 if channels==1 else [(.125,-.25)]*16)
     after=([sim.R(r)for r in range(16)],list(sim.alt),[sim.get(c)for c in range(0x10,0x50)],sim.u[ssim.U_MODE1])
     assert before==after
-    assert sim.rd(a.ring-1)==0xdeadbeef and sim.rd(a.ring+audio.RING_WORDS)==0xfeedface
+    assert sim.rd(a.ring-1)==0xdeadbeef and sim.rd(a.ring+a.ring_words)==0xfeedface
 
 
 @pytest.mark.parametrize('badbegin,badend', [(0,48000),(0x400000,0x400002),(0x400000,0x4000001)])
@@ -220,3 +221,80 @@ def test_restored_initial_play_high_stays_listening_until_low_arms_capture():
     a.block(samples)
     assert a.sim.rd(a.state+audio.PLAYING)==0
     assert a.sim.rd(a.state+audio.PLAY_ARMED)==0
+
+
+@pytest.mark.parametrize('mode', [0, 1, 2])
+@pytest.mark.parametrize('clock', [1., .5, 0.])
+@pytest.mark.parametrize('modify', [.1875, .8125])
+def test_mono_kernel_matches_single_channel_reference(oracle, mode, clock, modify):
+    capture, playback = 64, 256
+    expected = np.frombuffer(subprocess.check_output([
+        str(oracle), str(mode), str(clock), str(modify), str(capture),
+        str(playback), 'steady', '1']), np.float32).reshape(-1, 2)[:, 0]
+    a = audio.Audio(channels=1)
+    a.params(mode=mode, clock=clock, modify=modify, length=.63, mix=.8)
+    actual = []
+    for first in range(0, capture + playback, 16):
+        if first == capture: a.params(play=True)
+        if first == capture + 64: a.params(overdub=True)
+        if first == capture + 128: a.params(overdub=False)
+        actual.extend(a.block([input_at(i)[0] for i in range(first, first + 16)]))
+    np.testing.assert_allclose(actual, expected, atol=2e-6, rtol=0)
+    assert a.sim.rd(a.state + audio.CHANNELS) == 1
+
+
+@pytest.mark.parametrize('mode', [0, 1, 2])
+@pytest.mark.parametrize('inplace', [False, True])
+def test_mono_never_accesses_right_plane_or_exceeds_its_ring(monkeypatch, mode, inplace):
+    a = audio.Audio(channels=1)
+    a.params(mode=mode, mix=1, modify=.1875)
+    sim, ring_end = a.sim, a.ring + a.ring_words
+    # A forbidden virtual right plane catches reads as well as writes, including
+    # in-place output. Ring guards are equally strict on either side.
+    forbidden = {a.ring-1, ring_end}
+    forbidden.update(range(0xb8000+16, 0xb8000+32))
+    forbidden.update(range(0xb8100+16, 0xb8100+32))
+    read, write = sim.rd, sim.wr
+    def rd(address):
+        assert address not in forbidden
+        assert not 0x200000 <= address < 0x4000000 or a.ring <= address < ring_end
+        return read(address)
+    def wr(address, value):
+        assert address not in forbidden
+        assert not 0x200000 <= address < 0x4000000 or a.ring <= address < ring_end
+        write(address, value)
+    monkeypatch.setattr(sim, 'rd', rd)
+    monkeypatch.setattr(sim, 'wr', wr)
+    a.block([.25]*16, inplace=inplace)
+    sim.wr(a.state + audio.WRITE, 23992)
+    sim.wr(a.state + audio.RECORDED, 23992)
+    a.block([-.25]*16, inplace=inplace)
+    assert sim.rd(a.state + audio.WRITE) == 8
+    assert sim.rd(a.state + audio.RECORDED) == 24000
+    a.params(play=True)
+    for block in range(24):
+        if block == 2: a.params(overdub=True)
+        if block == 10: a.params(overdub=False, mode=(mode+1)%3, clock=.5)
+        if block == 14: a.params(play=False)
+        if block == 18: a.params(play=True)
+        assert len(a.block([.125]*16, inplace=inplace)) == 16
+    assert sim.rd(a.state + audio.ERRORS) == 0
+
+
+@pytest.mark.parametrize('inplace', [False, True])
+def test_mono_invalid_ring_is_exactly16_dry_words(monkeypatch, inplace):
+    a = audio.Audio(channels=1)
+    a.sim.wr(a.state + audio.RING_END, a.ring + a.ring_words - 1)
+    source = [frame/32 for frame in range(16)]
+    forbidden = set(range(0xb8000+16, 0xb8000+32)) | set(range(0xb8100+16, 0xb8100+32))
+    read, write = a.sim.rd, a.sim.wr
+    def rd(address):
+        assert address not in forbidden and not a.ring <= address < a.ring+a.ring_words
+        return read(address)
+    def wr(address, value):
+        assert address not in forbidden and not a.ring <= address < a.ring+a.ring_words
+        write(address, value)
+    monkeypatch.setattr(a.sim, 'rd', rd)
+    monkeypatch.setattr(a.sim, 'wr', wr)
+    assert a.block(source, inplace=inplace) == source
+    assert a.sim.rd(a.state + audio.ERRORS) == 1

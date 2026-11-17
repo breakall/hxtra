@@ -10,6 +10,7 @@ import microlooper_bridge as bridge
 import microlooper_init as native
 import microlooper_visa as visa
 import ssim
+from microlooper_definition import EFFECT, MONO_EFFECT
 
 STATE, INSTANCE, VALUE = 0xb3000, 0xb6000, 0xb7000
 STACK, FRAME = 0xc6d98, 0xc6e98
@@ -45,7 +46,7 @@ def setup(firmware, state=STATE, instance=INSTANCE):
     return sim, short, symbols
 
 
-def invoke(sim, short, symbols, *, init=False, pid=5, value=0, instance=INSTANCE):
+def invoke(sim, short, symbols, *, init=False, pid=5, value=0, instance=INSTANCE, channels=2):
     sim.set(0x16, FRAME)
     sim.set(0x17, STACK)
     sim.set(4, instance if init else pid)
@@ -57,7 +58,7 @@ def invoke(sim, short, symbols, *, init=False, pid=5, value=0, instance=INSTANCE
     preserved = [code for code in range(0x60) if code not in (0, 1, 2, 4, 8, 12, 0x14, 0x1c)]
     before = [sim.get(code) for code in preserved]
     mode1, pc_stack, loops = sim.get(ssim.U_MODE1), list(sim.pcstk), list(sim.loops)
-    native.invoke_from_stock_c_caller(sim, short, symbols[native.INIT_ENTRY if init else native.CONTROL_ENTRY])
+    native.invoke_from_stock_c_caller(sim, short, symbols[('MICROLOOPER_INIT_MONO' if channels == 1 else native.INIT_ENTRY) if init else native.CONTROL_ENTRY])
     assert [sim.get(code) for code in preserved] == before
     assert sim.get(ssim.U_MODE1) == mode1
     assert sim.pcstk == pc_stack and sim.loops == loops
@@ -65,17 +66,21 @@ def invoke(sim, short, symbols, *, init=False, pid=5, value=0, instance=INSTANCE
     assert sim.get(0) == 0  # deterministic status for both callbacks
 
 
-def test_registry_uses_only_custom_callbacks_and_no_private_pm():
-    record = native.registry(0x12e, 0xe4000, 0xe5000)
-    assert record == [0x12e, 0xe5000, 0, 0, 0xe500c, 0xe4000, 199, 0]
-    assert native.instructions() == 33
+@pytest.mark.parametrize('effect', [EFFECT, MONO_EFFECT])
+def test_registry_uses_only_custom_callbacks_and_no_private_pm(effect):
+    _, symbols = native.assemble(0xe5000)
+    record = native.registry(effect.primitive, 0xe4000, 0xe5000, effect=effect)
+    assert record == [effect.primitive, symbols[effect.callbacks.init], 0, 0,
+                      symbols[native.CONTROL_ENTRY], 0xe4000, 163, 0]
+    assert native.instructions() == 37
     for base in (-2, 1):
         with pytest.raises(ValueError):
             native.assemble(base)
 
 
 @pytest.mark.firmware
-def test_init_resets_exactly_transport_and_marker_without_sdram_or_ir_globals(firmware):
+@pytest.mark.parametrize("channels", [1, 2])
+def test_init_resets_exactly_transport_and_marker_without_sdram_or_ir_globals(firmware, channels):
     sim, short, symbols = setup(firmware)
     before = [0x5a000000 + j for j in range(native.STATE_WORDS)]
     for j, value in enumerate(before):
@@ -88,13 +93,14 @@ def test_init_resets_exactly_transport_and_marker_without_sdram_or_ir_globals(fi
         writes.append(address)
         write(address, value)
     sim.wr = log
-    invoke(sim, short, symbols, init=True)
+    invoke(sim, short, symbols, init=True, channels=channels)
     expected = list(before)
+    expected[14] = channels
     for offset in (10, 11, 20):
         expected[offset] = 0
     assert [sim.rd(STATE + j) for j in range(native.STATE_WORDS)] == expected
     assert sim.rd(STATE - 1) == sim.rd(STATE + native.STATE_WORDS) == 0xdeadbeef
-    assert set(writes) == {VALUE, STACK, STACK - 1, STATE + 10, STATE + 11, STATE + 20}
+    assert set(writes) == {VALUE, STACK, STACK - 1, STATE + 10, STATE + 11, STATE + 14, STATE + 20}
 
 
 @pytest.mark.firmware
@@ -118,7 +124,7 @@ def test_control_stores_raw_word_only_in_requested_instance_parameter(firmware, 
 
 
 @pytest.mark.firmware
-@pytest.mark.parametrize('pid', [0, 1, 4, 12, 144, 199, 0xffffffff])
+@pytest.mark.parametrize('pid', [0, 1, 4, 12, 14, 144, 199, 0xffffffff])
 def test_invalid_control_id_returns_without_value_or_descriptor_dereference(firmware, pid):
     sim, short, symbols = setup(firmware)
     reads = []
@@ -229,16 +235,17 @@ def test_unprocessed_instance_discards_transport_without_reading_value(firmware,
 @pytest.mark.parametrize('dirty', [None, 0x7fc00000, 0xffffffff],
                          ids=['finite', 'quiet-nan', 'all-bits-set'])
 @pytest.mark.parametrize('mode', [0, 1, 2])
-def test_native_callbacks_feed_real_bridge_and_stale_saved_transport_cannot_capture(firmware, dirty, mode):
+@pytest.mark.parametrize('channels', [1, 2])
+def test_native_callbacks_feed_real_bridge_and_stale_saved_transport_cannot_capture(firmware, dirty, mode, channels):
     sim, short, symbols = setup(firmware)
-    audio = bridge.Bridge(sim=sim, state=STATE, instance=INSTANCE)
+    audio = bridge.Bridge(sim=sim, state=STATE, instance=INSTANCE, channels=channels)
     sim.wr(INSTANCE, STATE)
     # Dirty an already used instance; native init must invalidate it without
     # touching the old SDRAM audio. Normal parameters arrive via real callbacks.
     for offset in range(native.STATE_WORDS):
         sim.wr(STATE + offset, 0x5a000000 + offset if dirty is None else dirty)
     sim.wr(0x400000, ssim.f2b(.875))
-    invoke(sim, short, symbols, init=True)
+    invoke(sim, short, symbols, init=True, channels=channels)
     assert sim.rd(0x400000) == ssim.f2b(.875)
     for pid, value in ((5, mode), (6, ssim.f2b(.5)), (7, ssim.f2b(.75)),
                        (8, ssim.f2b(1.)), (9, ssim.f2b(.5)), (10, 1), (11, 1)):
@@ -247,8 +254,10 @@ def test_native_callbacks_feed_real_bridge_and_stale_saved_transport_cannot_capt
     assert [sim.rd(STATE + pid) for pid in range(5, 10)] == [
         mode, ssim.f2b(.5), ssim.f2b(.75), ssim.f2b(1.), ssim.f2b(.5)]
     dry = [(.125 + frame/256., -.25 - frame/128.) for frame in range(16)]
+    if channels == 1:
+        dry = [pair[0] for pair in dry]
     output = audio.block(dry)
-    assert all(math.isfinite(sample) for frame in output for sample in frame)
+    assert all(math.isfinite(sample) for sample in (output if channels==1 else [sample for frame in output for sample in frame]))
     assert output == dry
     assert sim.rd(STATE + 22) == 16
     assert sim.rd(STATE + 26) == 0
@@ -257,6 +266,6 @@ def test_native_callbacks_feed_real_bridge_and_stale_saved_transport_cannot_capt
     # The first physical capture after publication succeeds immediately. No
     # second Listen delivery or second tap is needed to undo saved controls.
     invoke(sim, short, symbols, pid=10, value=1)
-    output = audio.block([(.375, -.5)] * 16)
-    assert all(math.isfinite(sample) for frame in output for sample in frame)
+    output = audio.block([.375] * 16 if channels==1 else [(.375, -.5)] * 16)
+    assert all(math.isfinite(sample) for sample in (output if channels==1 else [sample for frame in output for sample in frame]))
     assert sim.rd(STATE + 26) == 1

@@ -45,8 +45,9 @@ def register_state(sim):
 
 
 @pytest.mark.parametrize('invalid_extent',[False,True])
-def test_bridge_preserves_arguments_dag_metadata_registers_modes_and_status(invalid_extent):
-    native=bridge.Bridge();sim=native.sim
+@pytest.mark.parametrize('channels',[1,2])
+def test_bridge_preserves_arguments_dag_metadata_registers_modes_and_status(invalid_extent,channels):
+    native=bridge.Bridge(channels=channels);sim=native.sim
     rng=random.Random(335)
     for r in range(16):sim.setR(r,rng.getrandbits(32));sim.alt[r]=rng.getrandbits(32)
     for code in range(0x10,0x50):
@@ -59,7 +60,7 @@ def test_bridge_preserves_arguments_dag_metadata_registers_modes_and_status(inva
     sim.set(sasm.UREG_CODE['STKYY'],0xcafe2468)
     if invalid_extent:sim.wr(native.instance+7,native.ring+16)
     before=register_state(sim)
-    native.block([(.2,-.3)]*16)
+    native.block([.2]*16 if channels==1 else [(.2,-.3)]*16)
     assert register_state(sim)==before
     assert not sim.pcstk and not sim.loops
 
@@ -176,7 +177,7 @@ def test_private_state_ring_native_buffer_guards_and_stereo_isolation():
     assert sim.rd(native.state)==16 and sim.rd(native.state+2)==2
 
 
-def test_two_instances_keep_their_own_private_staging_and_history():
+def test_two_instances_keep_their_own_private_history():
     first=bridge.Bridge();second=bridge.Bridge(state=0xb4000,ring=0x420000,
                                              call_record=0xb6100,instance=0x9a100,sim=first.sim)
     first.block([(.25,0.)]*16);second.block([(0.,-.125)]*16)
@@ -184,8 +185,8 @@ def test_two_instances_keep_their_own_private_staging_and_history():
     assert first.sim.rd(first.ring+1)==0
     assert second.sim.rd(second.ring)==0
     assert second.sim.rd(second.ring+1)==ssim.f2b(-.125)
-    assert first.sim.rd(first.state+bridge.BUFFER_BEGIN)==ssim.f2b(.25)
-    assert second.sim.rd(second.state+bridge.BUFFER_BEGIN)==0
+    assert first.sim.rd(first.state+audio.RECORDED)==16
+    assert second.sim.rd(second.state+audio.RECORDED)==16
 
 
 def test_relocated_bridge_calls_explicit_relocated_core_entry():
@@ -200,7 +201,8 @@ def test_relocated_bridge_calls_explicit_relocated_core_entry():
 def test_assembly_is_explicitly_disabled_and_compact():
     assert bridge.NATIVE_STEREO_ABI_VERIFIED is False
     assert bridge.STATE_WORDS<=930
-    assert bridge.BUFFER_BEGIN==audio.STATE_WORDS
+    assert bridge.SPILL_BEGIN==audio.STATE_WORDS
+    assert bridge.STATE_WORDS==163
     sections,symbols=bridge.assemble(0xe3800,0xe4000)
     assert symbols[bridge.ENTRY]==0xe3800
     assert sum(len(s.words) for s in sections if s.kind=='pm')<=110
@@ -219,3 +221,25 @@ def test_native_heap6_instance_descriptor_binds_history_and_runs_audio(instance)
     assert native.sim.rd(native.state+13)==native.ring+audio.RING_WORDS
     assert native.sim.rd(native.state+20)==1
     assert native.sim.rd(native.state+22)==16
+
+
+@pytest.mark.parametrize('mode', [0, 1, 2])
+@pytest.mark.parametrize('inplace', [False, True])
+def test_mono_native_bridge_matches_direct_core_and_owns_half_ring(mode, inplace):
+    native, core = bridge.Bridge(channels=1), audio.Audio(channels=1)
+    for effect in (native, core):
+        effect.params(mode=mode, mix=.8, modify=.1875, length=.63)
+    for first in range(0, 384, 16):
+        changes = {}
+        if first == 64: changes['play'] = True
+        if first == 128: changes['overdub'] = True
+        if first == 192: changes['overdub'] = False
+        if first == 224: changes.update(mode=(mode+1)%3, clock=.5)
+        if changes:
+            native.params(**changes)
+            core.params(**changes)
+        samples = [signal(frame)[0] for frame in range(first, first+16)]
+        assert native.block(samples, inplace=inplace) == core.block(samples)
+    assert native.sim.rd(native.state + audio.CHANNELS) == 1
+    assert native.sim.rd(native.state + audio.RING_END) - native.ring == 24000
+    assert [native.sim.rd(native.ring+i) for i in range(24000)] == [core.sim.rd(core.ring+i) for i in range(24000)]

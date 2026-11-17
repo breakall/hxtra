@@ -8,7 +8,7 @@ separate. This module itself supplies no automatic FLAG/apply entry point.
 """
 import hashlib
 import struct
-from microlooper_definition import EFFECT
+from microlooper_definition import EFFECT, MODELS
 
 PRESET_ID = EFFECT.preset_id
 PLAY_SLOT = next(p.slot for p in EFFECT.parameters if p.name == 'Play')
@@ -23,24 +23,24 @@ PARAMETER_FILTER_STOCK = bytes.fromhex('2de9 f043')
 NATIVE_INTEGRATION_VERIFIED = False  # hardware qualification remains separate
 
 MODULE = 'src/m4/microlooper.s'
-MANIFEST_MAGIC = b'HXTRA_MLCTRLv3\0\0'
+MANIFEST_MAGIC = b'HXTRA_MLCTRLv4\0\0'
 MANIFEST_HEADER = struct.Struct('<16s13I32s')
-# Version3's position-independent bytes and public entry offsets. Source tests
+# Version4's position-independent bytes and public entry offsets. Source tests
 # force an explicit manifest revision whenever the installed runtime changes.
-MODULE_SHA256 = 'c54ae2a46c4dcd75db88aa93544ec214b0b17040f43d3f9f647ceba69c11e94e'
+MODULE_SHA256 = '8e63de2a6020fb03e6917c21cac9cdfddfb2017543633e2edc25418f0571a249'
 LAYOUT = {
-    'microlooper_native_bypass_filter': 604,
-    'microlooper_native_parameter_filter': 640,
-    'microlooper_controller_key': 1760,
-    'microlooper_controller_tick': 1898,
-    'microlooper_controller_object_before': 1936,
-    'microlooper_controller_model_before': 1974,
-    'microlooper_controller_up_before': 1978,
-    'microlooper_controller_down_before': 1982,
-    'microlooper_controller_range_before': 1984,
-    'microlooper_controller_lower_bypass_before': 2046,
-    'microlooper_controller_bypass_before': 2074,
-    'microlooper_controller_after': 2136,
+    'microlooper_native_bypass_filter': 624,
+    'microlooper_native_parameter_filter': 664,
+    'microlooper_controller_key': 1792,
+    'microlooper_controller_tick': 1930,
+    'microlooper_controller_object_before': 1968,
+    'microlooper_controller_model_before': 2006,
+    'microlooper_controller_up_before': 2010,
+    'microlooper_controller_down_before': 2014,
+    'microlooper_controller_range_before': 2016,
+    'microlooper_controller_lower_bypass_before': 2078,
+    'microlooper_controller_bypass_before': 2106,
+    'microlooper_controller_after': 2168,
 }
 HANDLER, HANDLER_STOCK = 0x28dd1978, bytes.fromhex('2de9 f043')
 # No stack-argument entry is chained. Native primitive creation/destruction and
@@ -69,6 +69,19 @@ CALLED = (
     (0x10000500, 'f8b5 0746', 'native mutex acquisition'),
     (0x10000560, '7b68 0133 3046 7b60', 'native same-task recursion counter'),
 )
+
+
+def asm_include():
+    """One native identity predicate generated from the declared model family.
+
+    r0 and argument registers survive; only r12 and condition flags change.
+    Z is set exactly for an Atmosphere model. Inline hooks preserve their LR.
+    """
+    lines = ['.thumb_func', 'microlooper_is_model:']
+    for effect in MODELS:
+        lines += [f'    movw r12, #{effect.preset_id}', '    cmp r0, r12',
+                  '    beq .Lml_model_match']
+    return '\n'.join(lines + ['.Lml_model_match:', '    bx lr', ''])
 
 
 def install(p, *, shared_input_hook=None):
@@ -104,7 +117,7 @@ def install(p, *, shared_input_hook=None):
         hook, stock, lp_event = shared_input_hook
         if hook.fn != HANDLER or hook.handler is not None or stock != hook.stock:
             raise SystemExit('microlooper requires the unbound shared footswitch hook')
-    m = p.module(MODULE)
+    m = p.module(MODULE, inc={'microlooper_models.inc': asm_include()})
     module_bytes = bytes(p.cave.buf[m.va - p.cave.va:])
     digest = hashlib.sha256(module_bytes).digest()
     if digest.hex() != MODULE_SHA256 or any(m.symbols[name] != offset for name, offset in LAYOUT.items()):
@@ -129,7 +142,7 @@ def install(p, *, shared_input_hook=None):
     input_veneer = p.add(veneer.bytes())
     hook.to(input_veneer)
     record_bytes = MANIFEST_HEADER.size + 20 * len(lifecycle_records)
-    manifest = MANIFEST_HEADER.pack(MANIFEST_MAGIC, 3, record_bytes, m.va, len(module_bytes),
+    manifest = MANIFEST_HEADER.pack(MANIFEST_MAGIC, 4, record_bytes, m.va, len(module_bytes),
         m['microlooper_controller_key'], m['microlooper_controller_tick'],
         m['microlooper_native_parameter_filter'], m['microlooper_native_bypass_filter'],
         input_veneer, stock, lp_event, m['microlooper_controller_after'], len(lifecycle_records), digest)
@@ -180,7 +193,7 @@ def verify_installed(e0):
     try:
         (magic, version, size, base, code_size, key, tick, parameter, bypass, input_veneer,
          stock, lp_event, after, count, digest) = MANIFEST_HEADER.unpack_from(raw, positions[0])
-        if version != 3 or count != len(LIFECYCLE) or size != MANIFEST_HEADER.size + count * 20:
+        if version != 4 or count != len(LIFECYCLE) or size != MANIFEST_HEADER.size + count * 20:
             raise ValueError('unsupported Atmosphere controller manifest layout')
         if digest.hex() != MODULE_SHA256 or hashlib.sha256(p.read(base, code_size)).digest() != digest:
             raise ValueError('Atmosphere controller bytes do not match the verified runtime version')
