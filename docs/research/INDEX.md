@@ -51,6 +51,7 @@ Before writing anything, read [conventions.md](conventions.md): the status tags,
 
 | note | covers | read it when |
 |---|---|---|
+| [GLASSHOUSE.md](GLASSHOUSE.md) | porting the Glasshouse compressor onto the Atmosphere build: source behavior, native controls, SHARC placement and validation | adding Glasshouse while preserving Atmosphere |
 | [features/gr-meter.md](features/gr-meter.md) | the GR meter end to end: knobs, DSP wrapper, frame words, M4 drawing | working on the GR meter, or another DSP-measured display |
 | [features/gr-meter-log.md](features/gr-meter-log.md) | every GR meter image and its result, in order | checking whether an idea was already tried |
 | [features/dsp-meter.md](features/dsp-meter.md) | per-block DSP cost in the Edit view and the model browser | working on the DSP meter |
