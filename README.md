@@ -273,6 +273,14 @@ return to listening, hold to overdub. Bypass Assign keeps its normal behavior.
 Include it in a command-line build with `HX_MICRO_LOOPER=1`; see
 [Atmosphere controls and build configuration](docs/atmosphere.md).
 
+## Glasshouse dynamics
+
+Native mono and stereo compression, limiting and sag, with EQ, Physics motion,
+swells and automation. Selected in command-line builds with `HX_GLASSHOUSE=1`;
+see [Glasshouse controls, build and validation status](docs/glasshouse.md).
+The port and its DSP startup transport are verified offline; hardware timing
+and listening remain to be checked.
+
 ## Engineering
 
 <table>

@@ -32,6 +32,12 @@ HXtra forks it at upstream commit `2e80164`, has merged upstream up to `01c0bb0`
   before M4 feature installation and links the shared audio kernel after the
   other DSP additions. Native Controller Assign supplies the Loop footswitch;
   bypass remains independent. See [Atmosphere](atmosphere.md).
+- **Glasshouse.** `tools/glasshouse_definition.py` declares native mono/stereo
+  Dynamics models with a hidden enable follower and native self-managed bypass.
+  `tools/sharc/glasshouse_audio.py` emits the per-instance SHARC audio program;
+  the original C++ source remains an independent reference. The linker reserves
+  code beside Atmosphere and uses a checked startup decoder to fit Entry 2.
+  See [Glasshouse](glasshouse.md).
 
 The [research notes](research/INDEX.md) have the details: addresses, the M4-to-DSP frame format, the Settings and Home screen internals, and the open problems. Start from their index.
 

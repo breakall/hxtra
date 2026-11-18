@@ -18,6 +18,11 @@ No Neural Amp Modeler model files (.nam captures) are included.
 
 Third-party material
 --------------------
+tools/glasshouse/reference.h and tools/glasshouse/settings.h: the original
+Glasshouse v0.3.2 audio reference, GPL-3.0-or-later. The source snapshot and its
+fingerprints are documented in tools/glasshouse/PROVENANCE.md. The Hothouse
+device firmware and vendor dependencies are not included.
+
 tools/sharc/sasm.py: the SHARC opcode tables are adapted from
 tools/sharc_isa.py of the ghidra-sharc extension
 (https://github.com/roblg/ghidra-sharc), licensed under the Apache License,

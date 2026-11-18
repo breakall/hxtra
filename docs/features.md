@@ -1,6 +1,6 @@
 # HXtra features
 
-Everything HXtra adds to the HX Stomp, where to find it, and every setting. The [setup page](https://wisemandenny.github.io/hxtra/web/) builds the standard features into one firmware; with [`build.py`](building.md) you choose features with switches. Atmosphere is selected in command-line builds.
+Everything HXtra adds to the HX Stomp, where to find it, and every setting. The [setup page](https://wisemandenny.github.io/hxtra/web/) builds the standard features into one firmware; with [`build.py`](building.md) you choose features with switches. Atmosphere and Glasshouse are selected in command-line builds.
 
 | Feature | Where it is on the HX Stomp | Switch |
 |---|---|---|
@@ -14,11 +14,12 @@ Everything HXtra adds to the HX Stomp, where to find it, and every setting. The 
 | [More snapshots](#more-snapshots) | The snapshot footswitches, with Footswitch Mode on Snapshot · no settings | `HX_MORE_SNAPSHOTS=1` |
 | [Metronome](#metronome) | Model browser: Looper > Metronome > Metronome · the block's knobs | `HX_CLICK=1` |
 | [Atmosphere](#atmosphere) | Model browser: Delay > Atmosphere · the block's knobs and Loop controller assignment | `HX_MICRO_LOOPER=1` |
+| [Glasshouse](glasshouse.md) | Model browser: Dynamics > Glasshouse · native block controls, Aux and Sag assignments | `HX_GLASSHOUSE=1` |
 | [GR meter](#gr-meter) | Home screen, lit by a compressor · knobs on six compressors | `HX_GR=1` |
 | [Boot screen](#boot-screen-hx-stomp-only) | The screen at power-on · set when you build | `--splash`, `--splash-text` |
 | [NAM A2 Lite](#nam-a2-lite) | Model browser: Amp > NAM | always on |
 
-Every feature here has run on an HX Stomp from RAM. The setup page includes the standard features, with Real block names selected by its checkbox; Atmosphere uses the command-line build. Each is off in a plain `build.py` build until its switch is set (an environment variable, or a `build.py` option), and switches combine:
+Glasshouse is verified offline and awaits hardware timing and listening checks; the other features here have run on an HX Stomp from RAM. The setup page includes the standard features, with Real block names selected by its checkbox; Atmosphere and Glasshouse use the command-line build. Each is off in a plain `build.py` build until its switch is set (an environment variable, or a `build.py` option), and switches combine:
 
 ```sh
 HX_TUNER=1 HX_BPM=1 HX_DSP_METER=1 HX_MORE_SNAPSHOTS=1 HX_TAP_COLOR=1 python3 build.py path/to/HX_Stomp_v3.80.0_0x103966115.hxf

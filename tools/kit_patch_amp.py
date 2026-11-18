@@ -1384,7 +1384,8 @@ def add_model_entry4(e4, src_blob_index, nam, prim_id=0x9c75, instance=None, fx=
     return out, new_blob_idx, new_comp_id
 
 
-def add_model_entry3(e3, src, new_name, display_name, blob_index, nam, drop_meta=()):
+def add_model_entry3(e3, src, new_name, display_name, blob_index, nam, drop_meta=(),
+                     display_param_count=None, follow_enable=False):
     """Entry 3 with one more model: a copy of `src` (a parse_entry3_full model)
     under a new internal name and displayName, with the next model ID and the
     parameters `nam` (nam_params).
@@ -1456,6 +1457,19 @@ def add_model_entry3(e3, src, new_name, display_name, blob_index, nam, drop_meta
         if ks < nstr and data_str(ks) in drop_meta:
             continue
         meta += struct.pack('<3I', ks, kt, kv)
+    if display_param_count is not None:
+        key = string('displayParamCount')
+        value = string(str(display_param_count))
+        for offset in range(0, len(meta), 12):
+            if struct.unpack_from('<I', meta, offset)[0] == key:
+                if struct.unpack_from('<I', meta, offset + 4)[0] != 7:
+                    raise ValueError('source display count is not a native string record')
+                struct.pack_into('<I', meta, offset + 8, value)
+                break
+        else:
+            meta += struct.pack('<3I', key, 7, value)
+    if follow_enable:
+        meta += struct.pack('<3I', string('followEnable'), 7, string('true'))
     d[0] = len(meta) // 12
 
     # one state per parameter map input node (nam_host_blob: node k for nam[k])

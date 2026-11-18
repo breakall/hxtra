@@ -493,6 +493,13 @@ def verify_archive(data, report, *, audio=True):
     cost = costs[0]['declared_dsp_cost']
     controls = microlooper_native.verify_installed(kit.get_entry_swapped(data, 0))
     e2 = kit.l6ia.swap32(kit.get_entry_swapped(data, 2))
+    # A combined Glasshouse build restores packed stock code at DSP reset.
+    # Check the actual startup instructions before using its runtime replay view.
+    import glasshouse_storage
+    startup = None
+    if glasshouse_storage.has_transport(e2):
+        startup = glasshouse_storage.verify_transport(e2)
+        e2 = glasshouse_storage.expand(e2)
     baseline, sections, decoded = verify_layout(e2, report)
     require(report.get('declared_dsp_cost') == cost, 'report DSP charge differs from model table')
     result = dict(archive_sha256=hashlib.sha256(data).hexdigest(), nam_slots=baseline.slots,
@@ -501,6 +508,8 @@ def verify_archive(data, report, *, audio=True):
                   executable_sections=sections, controls=controls, models=costs,
                   allocation_verified_offline=True, audio_verified_offline=False,
                   native_callbacks_executed=False, native_member_allocator_executed=False)
+    if startup is not None:
+        result['boot_transport'] = startup
     if audio:
         for effect, row in models:
             verify_callbacks(e2, decoded, row, effect)

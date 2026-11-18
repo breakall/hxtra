@@ -46,6 +46,7 @@ class Parameter:
     ui_index: int | None
     restore: str = 'value'
     labels: tuple[str, ...] = ()
+    follow_enable: bool = False
 
     def __post_init__(self):
         for name in ('slot', 'pid', 'state_index'):
@@ -73,6 +74,8 @@ class Parameter:
             raise ValueError('restore must be value or ignore')
         if self.labels and (self.type != 2 or len(self.labels) != self.maximum-self.minimum+1):
             raise ValueError('list labels must cover every integer value')
+        if type(self.follow_enable) is not bool or (self.follow_enable and (self.type != 1 or self.ui_index is not None)):
+            raise ValueError('native enable follower must be a hidden boolean parameter')
 
     def native(self):
         word = kit.f2u if self.type == 3 else int
@@ -82,6 +85,8 @@ class Parameter:
             meta += [(str(i+self.minimum), 7, label) for i, label in enumerate(self.labels)]
         elif self.type == 1:
             meta += [('false', 7, 'Off'), ('true', 7, 'On')]
+        if self.follow_enable:
+            meta += [('followEnable', 7, 'true')]
         return dict(slot=self.slot, pid=self.pid, name=self.name, type=self.type,
                     op=kit.NAM_INPUT_OP[self.type], state=self.state_key,
                     raw=[0, 0, 0, self.type, self.slot, word(self.minimum),
@@ -112,6 +117,7 @@ class EffectModel:
     instance: InstanceWords
     parameters: tuple[Parameter, ...]
     callbacks: Callbacks
+    self_bypass: bool = False
 
     def __post_init__(self):
         uint(self.preset_id, 'preset ID', 832)
@@ -120,6 +126,10 @@ class EffectModel:
             raise ValueError('valid preset ID, mono/stereo width and FX category required')
         if not self.parameters:
             raise ValueError('at least one direct parameter required')
+        if sum(p.follow_enable for p in self.parameters) > 1:
+            raise ValueError('only one native enable follower is supported')
+        if type(self.self_bypass) is not bool or (self.self_bypass and not self.follow_enable):
+            raise ValueError('self-managed bypass requires a native enable follower')
         for field in ('name', 'slot', 'pid', 'state_key', 'state_index'):
             values = [getattr(p, field) for p in self.parameters]
             if len(set(values)) != len(values):
@@ -139,6 +149,10 @@ class EffectModel:
     def shown(self):
         return sum(p.ui_index is not None for p in self.parameters)
 
+    @property
+    def follow_enable(self):
+        return any(p.follow_enable for p in self.parameters)
+
     def native_parameters(self):
         return [p.native() for p in sorted(self.parameters, key=lambda p: p.state_index)]
 
@@ -156,10 +170,18 @@ class EffectModel:
                 address(c.control), address(c.process), self.instance.dm_words, self.instance.pm_words]
 
     def describe(self):
-        return dict(model_name=self.name, preset_id=self.preset_id, primitive=self.primitive,
-                    width=self.width, instance=asdict(self.instance),
-                    parameters=[asdict(p) for p in sorted(self.parameters, key=lambda p: p.state_index)],
-                    callbacks=asdict(self.callbacks), allocation_scope='primitive payload; not total graph memory')
+        parameters = []
+        for parameter in sorted(self.parameters, key=lambda p: p.state_index):
+            description = asdict(parameter)
+            if not parameter.follow_enable:
+                del description['follow_enable']
+            parameters.append(description)
+        description = dict(model_name=self.name, preset_id=self.preset_id, primitive=self.primitive,
+                           width=self.width, instance=asdict(self.instance), parameters=parameters,
+                           callbacks=asdict(self.callbacks), allocation_scope='primitive payload; not total graph memory')
+        if self.self_bypass:
+            description['self_bypass'] = True
+        return description
 
 
 def register_model(data, effect, *, dsp_cost, registry_address, log=print):
@@ -182,23 +204,11 @@ def register_model(data, effect, *, dsp_cost, registry_address, log=print):
     new_e4, blob, composite = kit.add_model_entry4(
         e4, host['blob_index'], params, effect.primitive, asdict(effect.instance), fx=True)
     drop = tuple(key for key in kit.FX_MODEL_META_DROP if key != 'displayParamCount')
-    new_e3, _, _ = kit.add_model_entry3(e3, src, effect.name, effect.display, blob, params, drop_meta=drop)
+    new_e3, _, _ = kit.add_model_entry3(
+        e3, src, effect.name, effect.display, blob, params, drop_meta=drop,
+        display_param_count=effect.shown, follow_enable=effect.follow_enable)
     info = kit.parse_entry3_full(new_e3)
     item = kit.find_model(info, effect.name)
-    # The source supplies category/width policy; the declaration owns its UI.
-    # Write only the new model's record, leaving the stock source unchanged.
-    new_e3 = bytearray(new_e3)
-    for index in range(item['words'][0]):
-        offset = item['words'][1] + 12 * index
-        key, kind, _ = struct.unpack_from('<3I', new_e3, offset)
-        if info['strings'][key] == 'displayParamCount':
-            if kind != 7:
-                raise ValueError('source display count is not a native string record')
-            struct.pack_into('<I', new_e3, offset+8, info['strings'].index(str(effect.shown)))
-            break
-    else:
-        raise ValueError('source has no native display count record')
-    new_e3 = bytes(new_e3)
     if kit.pmap_slots_without_param(new_e4, blob, item['params']):
         raise ValueError('parameter map contains undeclared slots')
     new_e0, _, _, _ = kit.add_model_entry0(
@@ -215,6 +225,23 @@ def register_model(data, effect, *, dsp_cost, registry_address, log=print):
     if struct.unpack_from('<I', new_e0, row)[0] != item['words'][2]:
         raise ValueError('generated UI table does not identify the new model')
     struct.pack_into('<3I', new_e0, row+24, effect.shown, len(params), len(params))
+    struct.pack_into('<I', new_e0, row+36, int(effect.follow_enable))
+    if effect.self_bypass:
+        # Native kind24 keeps the DSP graph running while followEnable sends
+        # its hidden boolean. Feedbacker and Poly Sustain use the same policy.
+        # Change only this new model's browser item, never the source model.
+        found = 0
+        for subcategory in range(4):
+            index = 4*effect.category+subcategory
+            pointer, = struct.unpack_from('<I', new_e0, offset(target.BLIST_PTR_TAB+4*index))
+            count, = struct.unpack_from('<I', new_e0, offset(target.BLIST_CNT_TAB+4*index))
+            for position in range(count if pointer else 0):
+                item_offset = offset(pointer+48*position, 48)
+                if struct.unpack_from('<I', new_e0, item_offset+4)[0] == item['words'][2]:
+                    struct.pack_into('<I', new_e0, item_offset, 24)
+                    found += 1
+        if found != 1:
+            raise ValueError('self-managed effect must have exactly one native browser item')
     expanded, _ = kit.expand_sharc_blob0_buffer(raw)
     out, _, _ = kit.l6ia.rebuild_archive(data, {0: bytes(new_e0), 2: kit.l6ia.swap32(expanded),
                                               3: new_e3, 4: new_e4})
@@ -232,6 +259,8 @@ def verify_model(data, effect):
     params = effect.native_parameters()
     if len(item['params']) != len(params) or item['meta'].get('displayParamCount') != str(effect.shown):
         raise ValueError('effect parameter contract is changed')
+    if item['meta'].get('followEnable') != ('true' if effect.follow_enable else None):
+        raise ValueError('effect native enable-following policy is changed')
     for actual, expected in zip(item['params'], params):
         if ((actual['name'], actual['slot'], actual['type']) !=
                 (expected['name'], expected['slot'], expected['type']) or
@@ -278,4 +307,16 @@ def verify_model(data, effect):
     ui = [row for i in range(count) if (row := read(table+44*i, 44))[:4] == struct.pack('<I', item['words'][2])]
     if len(ui) != 1 or struct.unpack_from('<3I', ui[0], 24) != (effect.shown, len(params), len(params)):
         raise ValueError('effect UI parameter counts are changed')
+    if struct.unpack_from('<2I', ui[0], 36) != (int(effect.follow_enable), 0):
+        raise ValueError('effect native enable-following or meter policy is changed')
+    if effect.self_bypass:
+        kinds = []
+        for subcategory in range(4):
+            index = 4*effect.category+subcategory
+            pointer, = struct.unpack('<I', read(target.BLIST_PTR_TAB+4*index))
+            count, = struct.unpack('<I', read(target.BLIST_CNT_TAB+4*index))
+            kinds += [row[0] for position in range(count if pointer else 0)
+                      if (row := struct.unpack('<2I', read(pointer+48*position, 8)))[1] == item['words'][2]]
+        if kinds != [24]:
+            raise ValueError('effect self-managed native bypass policy is changed')
     return item, matches[0][3]

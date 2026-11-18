@@ -2,8 +2,12 @@
 
 Research date: 2026-11-18. HXtra baseline: `afdf284a1dba0d082258b3f4623518adfb3110d7`
 (`atmosphere-upstream`). Status tags follow [conventions.md](conventions.md).
-This is an implementation investigation; no Glasshouse HX Stomp audio kernel,
-firmware candidate, or on-unit result is established here.
+This records the initial implementation investigation. The native port and
+current validation are documented in [Glasshouse](../glasshouse.md) and the
+[implementation plan](../GLASSHOUSE_IMPLEMENTATION.md). Resource figures below
+describe the original Atmosphere baseline; the port's startup transport now
+recovers additional boot-partition space. HX Stomp hardware results remain
+separate from offline validation.
 
 ## Conclusion and scope
 

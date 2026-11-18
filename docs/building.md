@@ -46,6 +46,13 @@ Include the mono and stereo micro looper with `HX_MICRO_LOOPER=1`. Its
 [build command, controls and implementation](atmosphere.md) describe the native
 Loop controller assignment, separate bypass and per-instance storage.
 
+## Glasshouse
+
+Include the native mono/stereo dynamics effect with `HX_GLASSHOUSE=1` and explicit
+`HX_GLASSHOUSE_DSP_COST` / `HX_GLASSHOUSE_MONO_DSP_COST` admission charges.
+[Glasshouse](glasshouse.md) describes its controls, combined Atmosphere build,
+startup transport and current validation status.
+
 ## Build in the browser
 
 The setup page, **[wisemandenny.github.io/hxtra](https://wisemandenny.github.io/hxtra/web/)**, does the same build in the browser, with nothing uploaded: you drop your stock `.hxf` and download `HX_Stomp_v3.80.0_HXtra.hxf`, with the standard web features on, the Metronome block included, and Real block names if you tick their box. It also runs the build from RAM and converts `.nam` captures, and it reads in 10 languages. It runs `build.py`'s own commands in [Pyodide](https://pyodide.org) (`web/firmware-worker.js`); its builds have the same MD5s as `build.py`'s.

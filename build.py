@@ -21,6 +21,9 @@ preserving the same NAM profile as a build without Atmosphere support.
 HX_MICRO_LOOPER_DSP_COST sets the stereo charge; HX_MICRO_LOOPER_MONO_DSP_COST
 sets the mono charge. See docs/atmosphere.md.
 
+HX_GLASSHOUSE=1 adds native mono/stereo Glasshouse dynamics. Its DSP charges
+must be supplied as HX_GLASSHOUSE_DSP_COST and HX_GLASSHOUSE_MONO_DSP_COST.
+
 Steps:
   1. tools/sharc/nam_multi.py: the SHARC kernel, checked in the simulator
      against src/sharc/nam_a2.asm bit for bit, each block on its own capture
@@ -98,6 +101,23 @@ def microlooper_cost(unit, *, mono=False):
     return cost
 
 
+def glasshouse_cost(unit, *, mono=False):
+    """Require an explicit charge until real-device Glasshouse timing is measured."""
+    if not os.environ.get('HX_GLASSHOUSE'):
+        return None
+    if unit != 'HX_Stomp':
+        raise SystemExit('HX_GLASSHOUSE currently targets HX Stomp only')
+    variable = 'HX_GLASSHOUSE_MONO_DSP_COST' if mono else 'HX_GLASSHOUSE_DSP_COST'
+    raw = os.environ.get(variable, os.environ.get('HX_GLASSHOUSE_DSP_COST', '') if mono else '')
+    try:
+        cost = int(raw)
+    except ValueError:
+        raise SystemExit(f'{variable} must be an explicit integer in 1..7500')
+    if not 1 <= cost <= 7500:
+        raise SystemExit(f'{variable} must be an explicit integer in 1..7500')
+    return cost
+
+
 def run(*args):
     print("$ " + " ".join(args[1:] if args[0] == sys.executable else args), flush=True)
     r = subprocess.run(list(args), cwd=HERE, capture_output=True, text=True)
@@ -120,6 +140,8 @@ def main():
     unit = STOCK_MD5[md5]
     micro_cost = microlooper_cost(unit)
     micro_mono_cost = microlooper_cost(unit, mono=True)
+    glass_cost = glasshouse_cost(unit)
+    glass_mono_cost = glasshouse_cost(unit, mono=True)
     print(f"stock firmware: {unit.replace('_', ' ')} 3.80.0")
     splash = os.path.abspath(argv[argv.index("--splash") + 1]) if "--splash" in argv else None
     splash_text = argv[argv.index("--splash-text") + 1] if "--splash-text" in argv else None
@@ -157,6 +179,10 @@ def main():
         run(py, 'tools/patch_microlooper_build.py', 'metadata', base, titled,
             '--dsp-cost', str(micro_cost), '--mono-dsp-cost', str(micro_mono_cost))
         os.replace(titled, base)
+    if glass_cost is not None:
+        run(py, 'tools/patch_glasshouse_build.py', 'metadata', base, titled,
+            '--dsp-cost', str(glass_cost), '--mono-dsp-cost', str(glass_mono_cost))
+        os.replace(titled, base)
     if unit == "HX_Stomp":
         run(py, "tools/patch_menu.py", base, titled, "--cwd", os.getcwd())
         os.replace(titled, base)
@@ -172,15 +198,36 @@ def main():
         run(py, 'tools/patch_microlooper_build.py', 'dsp', image, titled,
             '--report', os.path.join(build, 'microlooper-build.json'))
         os.replace(titled, image)
+    if glass_cost is not None:
+        run(py, 'tools/patch_glasshouse_build.py', 'dsp', image, titled,
+            '--report', os.path.join(build, 'glasshouse-build.json'))
+        os.replace(titled, image)
     report = run(py, "tools/l6ia_verify.py", image)
     if "ALL OK" not in report:
         sys.exit("build.py: the image failed its checksum check")
     run(py, "tools/hxf.py", "pack", image, out, "--donor", stock)
     os.remove(base)
+    if glass_cost is not None:
+        report_path = os.path.join(build, 'glasshouse-build.json')
+        with open(report_path) as report_file:
+            glass_report = json.load(report_file)
+        glass_report.update(stock_hxf_md5=md5, output_hxf=out,
+                            output_hxf_md5=hashlib.md5(open(out, 'rb').read()).hexdigest())
+        with open(report_path, 'w') as report_file:
+            json.dump(glass_report, report_file, indent=2)
+            report_file.write('\n')
+        print('Glasshouse mono and stereo are included; see docs/glasshouse.md.')
     if micro_cost is not None:
         report_path = os.path.join(build, 'microlooper-build.json')
         with open(report_path) as report_file:
             micro_report = json.load(report_file)
+        if glass_cost is not None:
+            # The final Glasshouse link changes the storage representation of
+            # Entry 2 while retaining Atmosphere's executable sections.
+            micro_report.update(entry2_bytes=glass_report['entry2_bytes'],
+                                entry2_remaining_bytes=glass_report['entry2_remaining_bytes'],
+                                output_md5=glass_report['output_md5'],
+                                candidate_archive_sha256=glass_report['candidate_archive_sha256'])
         micro_report.update(stock_hxf_md5=md5, output_hxf=out,
                             output_hxf_md5=hashlib.md5(open(out, 'rb').read()).hexdigest())
         with open(report_path, 'w') as report_file:
