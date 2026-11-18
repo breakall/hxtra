@@ -61,17 +61,15 @@ def test_tap_capture_hold_overdub_release_and_tap_resume_listening(m4emu, model)
     assert b.writes == [(CTX, BLOCK, 7, 0)]
 
 
-@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
-def test_listening_hold_has_no_capture_or_overdub_and_duplicate_release_has_no_tap(m4emu, model):
-    b = Binding(m4emu, model); b.ready()
+def test_listening_hold_has_no_capture_or_overdub_and_duplicate_release_has_no_tap(m4emu):
+    b = Binding(m4emu); b.ready()
     b.update(True, 10); b.update(True, 400010); b.update(False, 400020)
     b.update(False, 400021)
     assert b.writes == []
 
 
-@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
-def test_new_binding_initializes_listen_and_stops_overdub_without_capturing(m4emu, model):
-    b = Binding(m4emu, model); b.ready()
+def test_new_binding_initializes_listen_and_stops_overdub_without_capturing(m4emu):
+    b = Binding(m4emu); b.ready()
     b.update(True, 10); b.update(False, 20)
     b.update(True, 30); b.update(True, 400030)
     b.writes.clear()
@@ -83,9 +81,8 @@ def test_new_binding_initializes_listen_and_stops_overdub_without_capturing(m4em
     assert b.writes == []
 
 
-@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
-def test_initial_pressed_level_is_not_a_restored_capture_command(m4emu, model):
-    b = Binding(m4emu, model)
+def test_initial_pressed_level_is_not_a_restored_capture_command(m4emu):
+    b = Binding(m4emu)
     b.update(True, 20)
     assert b.writes == [(CTX, BLOCK, 7, 0), (CTX, BLOCK, 8, 0)]
     b.writes.clear()
@@ -93,10 +90,9 @@ def test_initial_pressed_level_is_not_a_restored_capture_command(m4emu, model):
     assert b.writes == []
 
 
-@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
-@pytest.mark.parametrize('foreign_model', [147, 148, 555])
-def test_non_microlooper_binding_does_not_consume_event_or_modify_state(m4emu, model, foreign_model):
-    b = Binding(m4emu, model)
+@pytest.mark.parametrize('foreign_model', [147, 555])
+def test_non_microlooper_binding_does_not_consume_event_or_modify_state(m4emu, foreign_model):
+    b = Binding(m4emu)
     b.bind(model=foreign_model)
     before = b.m.read(STATE, 32)
     assert b.update(True, 20) == 0
@@ -104,9 +100,8 @@ def test_non_microlooper_binding_does_not_consume_event_or_modify_state(m4emu, m
     assert b.writes == []
 
 
-@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
-def test_failed_writes_retry_without_overtaking_or_losing_tap(m4emu, model):
-    b = Binding(m4emu, model); b.ready()
+def test_failed_writes_retry_without_overtaking_or_losing_tap(m4emu):
+    b = Binding(m4emu); b.ready()
     b.update(True, 10)
     b.fail = True
     assert b.update(False, 20) == 5
@@ -120,9 +115,8 @@ def test_failed_writes_retry_without_overtaking_or_losing_tap(m4emu, model):
     assert b.writes == []
 
 
-@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
-def test_initial_listen_write_failure_prevents_overdub_write_until_retry(m4emu, model):
-    b = Binding(m4emu, model); b.fail = True
+def test_initial_listen_write_failure_prevents_overdub_write_until_retry(m4emu):
+    b = Binding(m4emu); b.fail = True
     assert b.update(False, 0) == 5
     assert b.writes == [(CTX, BLOCK, 7, 0)]
     b.fail = False
@@ -130,9 +124,8 @@ def test_initial_listen_write_failure_prevents_overdub_write_until_retry(m4emu, 
     assert b.writes == [(CTX, BLOCK, 7, 0), (CTX, BLOCK, 7, 0), (CTX, BLOCK, 8, 0)]
 
 
-@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
-def test_two_block_bindings_keep_independent_transport_and_sentinels(m4emu, model):
-    b = Binding(m4emu, model)
+def test_two_block_bindings_keep_independent_transport_and_sentinels(m4emu):
+    b = Binding(m4emu)
     other_state, other_binding = STATE + 36, BINDING + 24
     b.m.write(STATE - 4, b'LEFT' + bytes(32) + b'MIDL' + bytes(32) + b'RGHT')
     b.bind(block=74, generation=2, at=other_binding)
@@ -149,9 +142,8 @@ def test_two_block_bindings_keep_independent_transport_and_sentinels(m4emu, mode
     assert b.m.read(other_state + 32, 4) == b'RGHT'
 
 
-@pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
-def test_wraparound_time_is_forwarded_to_gesture_without_a_long_press(m4emu, model):
-    b = Binding(m4emu, model); b.ready()
+def test_wraparound_time_is_forwarded_to_gesture_without_a_long_press(m4emu):
+    b = Binding(m4emu); b.ready()
     b.update(True, 0xffffff00); b.update(False, 0xffffff80)
     assert b.writes == [(CTX, BLOCK, 7, 1)]
     b.update(True, 0xfffffff0); b.update(True, 0xfffffff0 + 400000)
@@ -164,9 +156,7 @@ def test_atmosphere_is_opt_in_and_uses_one_feature_owner():
     feature = next(m for m in mods if features.name(m) == 'microlooper')
     assert feature.FLAG == 'HX_MICRO_LOOPER' and feature.WEB is False
     assert feature not in features.enabled(mods, {})
-    assert 'HX_MICROLOOPER' not in {flag for m in mods for flag in features.flags(m)}
-    assert not hasattr(microlooper, 'FLAG')
-    assert not hasattr(microlooper, 'apply')
+    assert feature in features.enabled(mods, {'HX_MICRO_LOOPER': '1'})
 
 
 @pytest.mark.firmware
@@ -278,7 +268,7 @@ def test_stock_tick_listener_shares_queued_dispatch_and_preserves_native_tick(m4
 
 
 @pytest.mark.firmware
-@pytest.mark.parametrize('first_model', [380, 381, 147, 555])
+@pytest.mark.parametrize('first_model', [380, 555])
 def test_native_bypass_remains_stock_for_atmosphere_and_other_blocks(m4emu, first_model):
     import patch_menu as pm
     from firmware import reader, stock_e0

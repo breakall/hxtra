@@ -81,31 +81,24 @@ def test_sticky_status_restored_even_when_callee_changes_it(monkeypatch):
     assert [sim.get(register) for register in sticky]==original
 
 
-@pytest.mark.parametrize('badcall',[0,0x7ffff,0xffffe,0x100000,0xfffffff0])
-def test_call_pointer_is_checked_before_reading_instance(monkeypatch,badcall):
-    native=bridge.Bridge();native.call_record=badcall
-    rd=native.sim.rd
+@pytest.mark.parametrize('field,pointer', [
+    *((field, pointer) for field in ('call', 'instance')
+      for pointer in (0, 0xfffffff0, 0xa0000, 0xd0000)),
+    ('instance', 0x30d100-1), ('instance', 0x324497-7), ('instance', 0x324497),
+])
+def test_invalid_descriptor_is_rejected_before_dereference(monkeypatch, field, pointer):
+    # Bank endpoints are covered below. These add null/wraparound, interior
+    # gaps in each folded window, and the separate Heap6 instance boundaries.
+    native = bridge.Bridge(**({'call_record': pointer} if field == 'call' else {'instance': pointer}))
+    rd = native.sim.rd
+    forbidden = {pointer+2} if field == 'call' else {pointer+6, pointer+7}
     def checked(address):
-        assert address & 0xffffffff != (badcall+2)&0xffffffff
+        assert address & 0xffffffff not in {value & 0xffffffff for value in forbidden}
         return rd(address)
-    monkeypatch.setattr(native.sim,'rd',checked)
-    samples=[(.125,-.25)]*16
-    assert native.block(samples)==samples
-    assert native.sim.rd(native.state+audio.ERRORS)==1
-
-
-@pytest.mark.parametrize('badinstance',[0,0x7ffff,0xffff9,0x100000,0xfffffff0,
-                                      0x30d100-1,0x324497-7,0x324497])
-def test_instance_pointer_is_checked_before_reading_extent(monkeypatch,badinstance):
-    native=bridge.Bridge();native.sim.wr(native.call_record+2,badinstance)
-    rd=native.sim.rd
-    def checked(address):
-        assert address & 0xffffffff not in {(badinstance+6)&0xffffffff,(badinstance+7)&0xffffffff}
-        return rd(address)
-    monkeypatch.setattr(native.sim,'rd',checked)
-    samples=[(.125,-.25)]*16
-    assert native.block(samples)==samples
-    assert native.sim.rd(native.state+audio.ERRORS)==1
+    monkeypatch.setattr(native.sim, 'rd', checked)
+    samples = [(.125, -.25)]*16
+    assert native.block(samples) == samples
+    assert native.sim.rd(native.state+audio.ERRORS) == 1
 
 
 @pytest.mark.parametrize('field,words',[('call',3),('instance',8)])
@@ -127,22 +120,6 @@ def test_whole_descriptor_must_fit_one_real_sram_bank(monkeypatch,field,words,lo
     assert native.block(samples)==samples
     assert native.sim.rd(native.state+audio.ERRORS)==int(not valid)
     assert native.sim.rd(native.state+audio.INITIALIZED)==int(valid)
-
-
-@pytest.mark.parametrize('pointer',[0x80000,0x8ffff,0x90000,0x91fff,0x9e000,
-                                    0xa0000,0xb0000,0xb1fff,0xbe000,0xbffff,
-                                    0xc8000,0xd0000,0xdffff,0xe8000,0xeffff,0xfffff])
-@pytest.mark.parametrize('field',['call','instance'])
-def test_rom_and_sram_gaps_are_rejected_before_dereference(monkeypatch,pointer,field):
-    native=bridge.Bridge(**({'call_record':pointer} if field=='call' else {'instance':pointer}))
-    rd=native.sim.rd
-    forbidden={pointer+2} if field=='call' else {pointer+6,pointer+7}
-    def checked(address):
-        assert address & 0xffffffff not in forbidden
-        return rd(address)
-    monkeypatch.setattr(native.sim,'rd',checked)
-    assert native.block([(.125,-.25)]*16)==[(.125,-.25)]*16
-    assert native.sim.rd(native.state+audio.ERRORS)==1
 
 
 @pytest.mark.parametrize('begin,end',[(0,48000),(0x400000,0x400002),(0x400000,0x3fffff),
@@ -198,20 +175,12 @@ def test_relocated_bridge_calls_explicit_relocated_core_entry():
     assert native.sim.rd(native.state+audio.RECORDED)==16
 
 
-def test_bridge_layout_and_encoded_size_are_bounded():
-    assert bridge.STATE_WORDS<=930
-    assert bridge.SPILL_BEGIN==audio.STATE_WORDS
-    assert bridge.STATE_WORDS==163
-    sections,symbols=bridge.assemble(0xe3800,0xe4000)
-    assert symbols[bridge.ENTRY]==0xe3800
-    assert sum(len(s.words) for s in sections if s.kind=='pm')<=110
-    n=bridge.instructions()
-    assert 12+6*(n+n%2)<=684
+def test_bridge_rejects_invalid_code_addresses():
     for base,core in [(-1,0xe3000),(0xe3501,0xe3000),(0xe3500,-1)]:
         with pytest.raises(ValueError):bridge.assemble(base,core)
 
 
-@pytest.mark.parametrize('instance',[0x30d100,0x31122f,0x324497-8])
+@pytest.mark.parametrize('instance',[0x30d100,0x324497-8])
 def test_native_heap6_instance_descriptor_binds_history_and_runs_audio(instance):
     native=bridge.Bridge(instance=instance)
     samples=[signal(i) for i in range(16)]

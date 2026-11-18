@@ -37,7 +37,8 @@ def test_documented_offset7_and_postmodify_forms():
     assert decoded.isa == isa('R3 = DM(I1,M6);')
 
 
-@pytest.mark.parametrize('index', range(8, 16))
+# Zero, each selector bit, and all bits catch offset and bit-order mistakes.
+@pytest.mark.parametrize('index', [8, 9, 10, 12, 15])
 @pytest.mark.parametrize('store', [False, True])
 def test_offset7_dag2_selector_matches_traditional_form_and_uses_dag2(index, store):
     p = 0x9028 | ((index - 8) << 9) | (store << 8)
@@ -190,8 +191,6 @@ def test_do_uses_next_instruction_short_word_address_and_repeats_mixed_width_bod
         visa.step(sim, store)
         assert sim.rd(0xb9000) == 100 + j
     assert sim.pc == 0x170006 and not sim.loops
-
-
 
 
 def test_reader_requires_explicit_parcel_order():

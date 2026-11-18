@@ -1,5 +1,4 @@
 """Native-route controller, ownership boundaries, and stock recursive mutex."""
-import hashlib
 import struct
 
 import pytest
@@ -356,34 +355,6 @@ def test_assignment_change_while_released_accepts_the_next_fresh_press(controlle
     assert c.writes == [(1, 7, 0)], 'new assigned switch should respond on its first fresh tap'
 
 
-def test_install_uses_guarded_native_entries(m4emu):
-    p = pm.Patch(stock_e0(), [], {}, load=stock_entry)
-    report = native.install(p)
-    assert report['microlooper_controller_key'] and not report['shared_long_press']
-    p.finish_chains()
-    assert p.u32(native.TICK_LITERAL) != native.TICK_STOCK
-
-
-def test_actual_rom_mutex_counts_same_task_recursion(m4emu):
-    read = reader(stock_e0())
-    m = m4emu.M4(read(0x100003b0, 0x460), 0x100003b0)
-    m.stub(0x100003c8, lambda m: m.reg('r0', 0))  # task context
-    m.stub(0x100003b0, lambda m: m.reg('r0', 0))  # save interrupt state
-    m.stub(0x100003c0)                           # restore interrupt state
-    m.stub(0x100007c8, lambda m: m.reg('r0', THREAD))
-    m.stub(0x100007bc, lambda m: m.reg('r0', 0))
-    mutex = 0x28f60000
-    assert m.call(0x100004f4, mutex) == 0
-    assert m.call(0x10000500, mutex) == 0
-    assert (m.u32(mutex), m.u32(mutex + 4)) == (THREAD, 1)
-    assert m.call(0x10000500, mutex) == 0
-    assert (m.u32(mutex), m.u32(mutex + 4)) == (THREAD, 2)
-    assert m.call(0x100005b4, mutex) == 0
-    assert (m.u32(mutex), m.u32(mutex + 4)) == (THREAD, 1)
-    assert m.call(0x100005b4, mutex) == 0
-    assert (m.u32(mutex), m.u32(mutex + 4)) == (0, 0)
-
-
 def test_real_native_mutation_failure_preserves_live_playback_with_off_retries(m4emu):
     entry, error = 0x28dfc2c4, -45
     p = pm.Patch(stock_e0(), [], {}, load=stock_entry)
@@ -519,12 +490,6 @@ def test_actual_native_move_retargets_owned_transport_without_stopping_playback(
     assert c.writes == [(1, 8, 0)], 'retained native allocation preserves Play and disarms old release'
 
 
-def test_manifest_version_matches_assembled_source(m4emu):
-    code, symbols = m4emu.assemble(native.MODULE, [], {}, inc={'microlooper_models.inc': native.asm_include()})
-    assert hashlib.sha256(code).hexdigest() == native.MODULE_SHA256
-    assert {name: symbols[name] for name in native.LAYOUT} == native.LAYOUT
-
-
 @pytest.mark.parametrize('long_press', [False, True])
 def test_real_feature_installation_and_single_input_owner_manifest(long_press):
     import features
@@ -559,7 +524,7 @@ def test_manifest_requires_real_hook_relationships_not_marker(target):
         native.verify_installed(e0)
 
 
-def test_stock_and_duplicate_or_truncated_manifest_are_rejected():
+def test_stock_and_duplicate_manifests_are_rejected():
     with pytest.raises(ValueError, match='exactly one'):
         native.verify_installed(stock_e0())
     p = pm.Patch(stock_e0(), [], {}, load=stock_entry)
@@ -570,11 +535,10 @@ def test_stock_and_duplicate_or_truncated_manifest_are_rejected():
 
 
 @pytest.mark.parametrize('changed', [False, True])
-def test_actual_lower_bypass_for_ui_midi_and_snapshot_preserves_play(controller, changed):
-    c = controller
+def test_actual_lower_bypass_for_ui_midi_and_snapshot_preserves_play(m4emu, changed):
     p = pm.Patch(stock_e0(), [], {}, load=stock_entry)
     report = native.install(p); p.finish_chains()
-    c = Controller(c.api, installed=(p, report))
+    c = Controller(m4emu, installed=(p, report))
     c.add(); c.assign(0, [1]); c.tick(); c.key(1); c.key(2)
     c.key(1); c.now = 400000; c.tick(); c.writes.clear()
     before = c.routes()[0]

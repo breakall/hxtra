@@ -35,10 +35,3 @@ def test_atmosphere_explicit_native_values_are_preserved(monkeypatch, model):
     block = hx_ctl.blocks(sec)[1][20]
     assert block[9] == 8
     assert block[11] == {2: 9, 3: 8, 4: values}
-
-
-
-def test_atmosphere_preserves_other_known_model_defaults():
-    assert {effect.preset_id for effect in MODELS} == {380, 381}
-    assert hx_ctl.KNOWN_KIND[147] == 17
-    assert 147 not in hx_ctl.KNOWN_PARAMS

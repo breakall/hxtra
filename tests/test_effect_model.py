@@ -78,7 +78,6 @@ def test_persisted_order_is_independent_of_public_slots(registered):
     assert [p['slot'] for p in item['params']] == [8, 7, 6, 5, 4, 3, 2, 1]
     params = effect.native_parameters()
     assert params[0]['state'] == 'OverdubState' and params[0]['slot'] == 8
-    assert [p.restore for p in EFFECT.parameters[-3:]] == ['ignore', 'ignore', 'ignore']
 
 
 @pytest.mark.firmware

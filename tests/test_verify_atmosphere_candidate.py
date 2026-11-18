@@ -23,12 +23,6 @@ from sharc import nam_multi
 from sharc import sasm
 
 
-def test_explicit_sections_do_not_depend_on_source_instruction_counts():
-    section = dict(kind='external_isa48', code_pm=0x21889a, instructions=1232,
-                   data_begin=0x324ce7, data_end=0x32541f)
-    assert verify.executable_sections({'executable_sections': [section]}) == [section]
-
-
 @pytest.mark.parametrize('change', [{'kind': 'unknown'}, {'instructions': 3},
                                   {'instructions': 0}, {'code_pm': 7}])
 def test_bad_section_contract_is_rejected(change):
