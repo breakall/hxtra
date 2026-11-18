@@ -1,0 +1,1220 @@
+// Private state/scratch offsets (32-bit normal words):
+// mode=5, length=6, modify=7, clock=8, mix=9, wantplay=10, wantdub=11
+// ring=12, ringend=13, channels=14, initialized=20, write=21, count=22, start=23, full=24
+// dubwrite=25, playing=26, prev_mode=27, step=28, divider=29, ticks=30, play=31
+// transport=32, phase=33, anchor0=34, anchor1=35, env=36, envheld=37, slice_start=38
+// held_l=39, held_r=40, previous_l=41, previous_r=42, transition_l=43, transition_r=44, mix_s=45
+// gain_s=46, transition=47, errors=48, c_length=49, c_modify=50, c_clock=51, c_mix=52
+// desired=53, requested=54, tape_length=55, slice=56, grain=57, scan=58, grain_delta=59
+// rateindex=60, rate=61, ex=62, ei=63, frac=64, threshold=65, left=66
+// in_l=67, in_r=68, result_l=69, result_r=70, energy=71, rp=72, rl=73
+// read_l=74, read_r=75, wp=76, ws=77, wr=78, env_threshold=79, edge=80
+// edge_gain=81, phase0=82, phase1=83, weight=84, nextphase=85, index=86, old_l=87
+// old_r=88, fraction=89, processed_l=90, processed_r=91, target=92, amount=93, wq=94
+// seam=95, period=96, ap=97, at_l=98, tail_l=99, at_r=100, tail_r=101
+// blend=102, a=103, afrac=104, b=105, ceil_len=106, a_l=107, a_r=108
+// b_l=109, b_r=110, effective_overdub=111, previous_overdub=112, play_armed=113
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Atmosphere looper-only audio port, native planar mono/stereo ABI.
+// I0 private DM, I1 input, I2 output;16 frames/call. DM14 is1mono or2stereo.
+// Stereo buffers contain L[16],R[16];mono buffers contain16words.
+// PIDs5 Mode(0Envelope1Tape2Stretch),6Length,7Modify,8Clock,9Mix,10Play,11Overdub.
+// Caller owns SDRAM ring [DM12,DM13), >=24000*channels words; per-instance state.
+// Init/reset: clear initialized word20; params and SDRAM pointer slots retained.
+// No ring-wide clear; history validity prevents reading stale audio.
+// Only modified registers are spilled; R6..R12 and I7/L7 are untouched.
+// Arithmetic uses 32-bit round-to-nearest; caller MODE1 restored exactly.
+// Duplicate rawOD levels are idempotent: after an ignored high while
+// listening, return low before requesting another overdub. Transport
+// transitions always clear effectiveOD. Native graph init must force both
+// Play/OD controls low before the first call. Initial Play high is ignored
+// until a low level has been observed; live armed snapshots need exclusion.
+// RECIPS uses two Newton refinements; exp2 threshold uses reduced degree 10
+// polynomial, with float32 rounding tested against the C++ oracle.
+.equ PEYEN, 0x200000
+.equ BDCST9, 0x400000
+.equ RND32, 0x10000
+.equ TRUNCATE, 0x8000
+.section pm KIT_PM_BASE
+CUSTOM_AMP_ENTRY:
+DM(128, I0) = MODE1;
+BIT CLR MODE1 PEYEN | BDCST9;
+BIT SET MODE1 RND32;
+BIT CLR MODE1 TRUNCATE;
+DM(129, I0) = R0;
+DM(130, I0) = R1;
+DM(131, I0) = R2;
+DM(132, I0) = R3;
+DM(133, I0) = R4;
+DM(134, I0) = R5;
+R5 = DM(14, I0);
+R5 = R5 - 1;
+DM(142, I0) = R13;
+DM(143, I0) = R14;
+DM(144, I0) = R15;
+R0 = I4;
+DM(145, I0) = R0;
+R0 = L4;
+DM(146, I0) = R0;
+L4 = 0;
+R0 = I5;
+DM(147, I0) = R0;
+R0 = L5;
+DM(148, I0) = R0;
+L5 = 0;
+R0 = I6;
+DM(149, I0) = R0;
+R0 = L6;
+DM(150, I0) = R0;
+L6 = 0;
+I4 = I1;
+I5 = I2;
+R0 = DM(12, I0);
+R1 = 0x200000;
+COMPU(R0, R1);
+IF LT JUMP ml_invalid;
+R1 = DM(13, I0);
+R2 = 0x4000000;
+COMPU(R1, R2);
+IF GT JUMP ml_invalid;
+COMPU(R1, R0);
+IF LE JUMP ml_invalid;
+R1 = R1 - R0;
+R2 = 24000;
+R2 = LSHIFT R2 BY R5;
+COMPU(R1, R2);
+IF LT JUMP ml_invalid;
+R0 = DM(20, I0);
+R0 = PASS R0;
+IF NE JUMP ml_initdone_1;
+// Bounded scalar reset only:28 private words, never the48000-word ring.
+I6 = I0;
+MODIFY(I6, 21);
+R0 = 0;
+R1 = 28;
+ml_reset_scalar:
+DM(I6, 1) = R0;
+R1 = R1 - 1;
+IF NE JUMP ml_reset_scalar;
+R0 = 1;
+DM(20, I0) = R0;
+DM(27, I0) = R0;
+DM(29, I0) = R0;
+DM(24, I0) = R0;
+F0 = 1.0;
+DM(47, I0) = F0;
+R0 = 0;
+DM(111, I0) = R0;
+DM(112, I0) = R0;
+DM(113, I0) = R0;
+ml_initdone_1:
+// Shared clamp constants; R3/R4 are already saved and overwritten before use.
+F3 = 1.0;
+F4 = 0.0;
+F2 = DM(6, I0);
+F1 = MAX(F4, F2);
+F0 = MIN(F3, F1);
+DM(49, I0) = F0;
+F2 = DM(7, I0);
+F1 = MAX(F4, F2);
+F0 = MIN(F3, F1);
+DM(50, I0) = F0;
+F2 = DM(8, I0);
+F1 = MAX(F4, F2);
+F0 = MIN(F3, F1);
+DM(51, I0) = F0;
+F2 = DM(9, I0);
+F1 = MAX(F4, F2);
+F0 = MIN(F3, F1);
+DM(52, I0) = F0;
+R0 = DM(5, I0);
+R1 = DM(27, I0);
+COMP(R0, R1);
+IF EQ JUMP ml_modeunchanged_2;
+F0 = DM(39, I0);
+DM(43, I0) = F0;
+F0 = DM(40, I0);
+DM(44, I0) = F0;
+F0 = 0.0;
+DM(47, I0) = F0;
+R0 = 0;
+DM(37, I0) = R0;
+R0 = DM(5, I0);
+DM(27, I0) = R0;
+ml_modeunchanged_2:
+F0 = 1.0;
+F1 = DM(51, I0);
+F0 = F0 - F1;
+F1 = 4.0;
+F0 = F0 * F1;
+DM(53, I0) = F0;
+ml_stepup_3:
+R0 = DM(28, I0);
+R1 = 4;
+COMP(R0, R1);
+IF GE JUMP ml_stepdown_4;
+F0 = DM(53, I0);
+R1 = DM(28, I0);
+F1 = FLOAT R1;
+F2 = 0.58;
+F1 = F1 + F2;
+COMP(F0, F1);
+IF LE JUMP ml_stepdown_4;
+R0 = DM(28, I0);
+R0 = R0 + 1;
+DM(28, I0) = R0;
+JUMP ml_stepup_3;
+ml_stepdown_4:
+R0 = DM(28, I0);
+R0 = PASS R0;
+IF LE JUMP ml_stepdone_5;
+F0 = DM(53, I0);
+R1 = DM(28, I0);
+F1 = FLOAT R1;
+F2 = 0.58;
+F1 = F1 - F2;
+COMP(F0, F1);
+IF GE JUMP ml_stepdone_5;
+R0 = DM(28, I0);
+R0 = R0 - 1;
+DM(28, I0) = R0;
+JUMP ml_stepdown_4;
+ml_stepdone_5:
+R1 = DM(28, I0);
+R0 = 1;
+R0 = LSHIFT R0 BY R1;
+DM(29, I0) = R0;
+// DM111 effectiveOD, DM112 previous normalized rawOD. Merely holding raw
+// OD high while listening cannot start overdub after a later capture.
+R0 = DM(11, I0);
+R0 = PASS R0;
+IF EQ JUMP ml_od_request_low;
+R0 = 1;
+ml_od_request_low:
+R1 = DM(112, I0);
+COMP(R0, R1);
+IF EQ JUMP ml_od_request_done;
+DM(112, I0) = R0;
+DM(111, I0) = R0;
+R1 = DM(26, I0);
+R1 = PASS R1;
+IF NE JUMP ml_od_request_done;
+R0 = 0;
+DM(111, I0) = R0;
+ml_od_request_done:
+// A fresh instance starts listening even if a preset restores Play high.
+// Only an observed low arms subsequent capture. A first high with no prior
+// low is intentionally ignored; it cannot be distinguished from restoration.
+R0 = DM(10, I0);
+R0 = PASS R0;
+IF NE JUMP ml_play_request_high;
+R0 = 1;
+DM(113, I0) = R0;
+R0 = 0;
+JUMP ml_wantdone_8;
+ml_play_request_high:
+R0 = DM(113, I0);
+R0 = PASS R0;
+IF EQ JUMP ml_wantzero_7;
+R0 = 1;
+JUMP ml_wantdone_8;
+ml_wantzero_7:
+R0 = 0;
+ml_wantdone_8:
+DM(54, I0) = R0;
+R1 = DM(26, I0);
+COMP(R0, R1);
+IF EQ JUMP ml_sameplay_6;
+F0 = DM(39, I0);
+DM(43, I0) = F0;
+F0 = DM(40, I0);
+DM(44, I0) = F0;
+F0 = 0.0;
+DM(47, I0) = F0;
+R0 = DM(54, I0);
+DM(26, I0) = R0;
+R0 = 0;
+DM(111, I0) = R0;
+DM(25, I0) = R0;
+DM(37, I0) = R0;
+R0 = DM(26, I0);
+R0 = PASS R0;
+IF EQ JUMP ml_listen_9;
+R0 = DM(22, I0);
+R1 = 1;
+R0 = MAX(R0, R1);
+DM(24, I0) = R0;
+R0 = DM(21, I0);
+R1 = 24000;
+R0 = R0 + R1;
+DM(23, I0) = R0;
+R1 = DM(24, I0);
+R0 = R0 - R1;
+DM(23, I0) = R0;
+R1 = 24000;
+COMP(R0, R1);
+IF LT JUMP ml_startok_10;
+R0 = DM(23, I0);
+R1 = 24000;
+R0 = R0 - R1;
+DM(23, I0) = R0;
+ml_startok_10:
+R0 = DM(22, I0);
+R0 = PASS R0;
+IF NE JUMP ml_nonempty_11;
+R0 = DM(23, I0);
+R0 = LSHIFT R0 BY R5;
+R1 = DM(12, I0);
+R0 = R0 + R1;
+I6 = R0;
+R0 = 0;
+DM(I6, 1) = R0;
+R5 = PASS R5;
+IF EQ JUMP ml_empty_right_done;
+DM(I6, 1) = R0;
+ml_empty_right_done:
+ml_nonempty_11:
+F0 = 0.0;
+DM(31, I0) = F0;
+DM(32, I0) = F0;
+DM(33, I0) = F0;
+DM(34, I0) = F0;
+DM(35, I0) = F0;
+JUMP ml_sameplay_6;
+ml_listen_9:
+R0 = 0;
+DM(22, I0) = R0;
+ml_sameplay_6:
+F0 = 1.0;
+R1 = DM(24, I0);
+F1 = FLOAT R1;
+F2 = 0.02;
+F3 = 0.98;
+F4 = DM(49, I0);
+F4 = F4 * F4;
+F3 = F3 * F4;
+F2 = F2 + F3;
+F1 = F1 * F2;
+F0 = MAX(F0, F1);
+DM(55, I0) = F0;
+R0 = DM(24, I0);
+F0 = FLOAT R0;
+F1 = 48.0;
+F2 = DM(49, I0);
+F2 = F2 * F2;
+R3 = DM(24, I0);
+F3 = FLOAT R3;
+F4 = 1.0;
+F3 = F3 - F4;
+F2 = F2 * F3;
+F1 = F1 + F2;
+F0 = MIN(F0, F1);
+DM(56, I0) = F0;
+R0 = DM(24, I0);
+F0 = FLOAT R0;
+F1 = 96.0;
+F2 = DM(49, I0);
+F2 = F2 * F2;
+F3 = 16000.0;
+F2 = F2 * F3;
+F1 = F1 + F2;
+F0 = MIN(F0, F1);
+DM(57, I0) = F0;
+F0 = DM(50, I0);
+F1 = 2.0;
+F0 = F0 * F1;
+F1 = 1.0;
+F0 = F0 - F1;
+F1 = ABS F0;
+F0 = F0 * F1;
+DM(58, I0) = F0;
+F0 = 1.0;
+F1 = DM(57, I0);
+F14 = RECIPS F1;
+F15 = F1 * F14;
+F13 = 2.0;
+F15 = F13 - F15;
+F14 = F14 * F15;
+F15 = F1 * F14;
+F15 = F13 - F15;
+F14 = F14 * F15;
+F0 = F0 * F14;
+DM(59, I0) = F0;
+// Eight exact Tape rates, with the upper endpoint clamped to zone7.
+// Negative zones0..3 have exponents2-index; positive4..7 index-5.
+F0 = DM(50, I0);
+F1 = 8.0;
+F0 = F0 * F1;
+R0 = TRUNC F0;
+R1 = 7;
+R0 = MIN(R0, R1);
+DM(60, I0) = R0;
+R1 = 4;
+COMP(R0, R1);
+IF GE JUMP ml_rate_positive;
+R1 = 2;
+R1 = R1 - R0;
+F0 = -1.0;
+JUMP ml_rate_scale;
+ml_rate_positive:
+R1 = 5;
+R1 = R0 - R1;
+F0 = 1.0;
+ml_rate_scale:
+F0 = SCALB F0 BY R1;
+DM(61, I0) = F0;
+ml_rateend_12:
+F0 = -9.0;
+F1 = DM(50, I0);
+F0 = F0 * F1;
+DM(62, I0) = F0;
+R0 = TRUNC F0;
+DM(63, I0) = R0;
+F0 = FLOAT R0;
+F1 = DM(62, I0);
+COMP(F0, F1);
+IF LE JUMP ml_floorok_21;
+R0 = DM(63, I0);
+R0 = R0 - 1;
+DM(63, I0) = R0;
+ml_floorok_21:
+F0 = DM(62, I0);
+R1 = DM(63, I0);
+F1 = FLOAT R1;
+F0 = F0 - F1;
+DM(64, I0) = F0;
+F2 = DM(64, I0);
+F0 = 7.054911620801121e-09;
+F0 = F0 * F2;
+F1 = 1.0178086009239696e-07;
+F0 = F0 + F1;
+F0 = F0 * F2;
+F1 = 1.3215486790144305e-06;
+F0 = F0 + F1;
+F0 = F0 * F2;
+F1 = 1.5252733804059838e-05;
+F0 = F0 + F1;
+F0 = F0 * F2;
+F1 = 0.00015403530393381606;
+F0 = F0 + F1;
+F0 = F0 * F2;
+F1 = 0.0013333558146428441;
+F0 = F0 + F1;
+F0 = F0 * F2;
+F1 = 0.009618129107628477;
+F0 = F0 + F1;
+F0 = F0 * F2;
+F1 = 0.055504108664821576;
+F0 = F0 + F1;
+F0 = F0 * F2;
+F1 = 0.2402265069591007;
+F0 = F0 + F1;
+F0 = F0 * F2;
+F1 = 0.6931471805599453;
+F0 = F0 + F1;
+F0 = F0 * F2;
+F1 = 1.0;
+F0 = F0 + F1;
+R1 = DM(63, I0);
+F0 = SCALB F0 BY R1;
+F1 = 0.25;
+F0 = F0 * F1;
+DM(65, I0) = F0;
+// Read geometry is invariant for the complete16-frame callback.
+R0 = DM(5, I0);
+R0 = PASS R0;
+IF EQ JUMP ml_geometry_full;
+R1 = 2;
+COMP(R0, R1);
+IF EQ JUMP ml_geometry_full;
+F0 = DM(55, I0);
+JUMP ml_geometry_length;
+ml_geometry_full:
+R0 = DM(24, I0);
+F0 = FLOAT R0;
+ml_geometry_length:
+DM(73, I0) = F0;
+F1 = 240.0;
+F2 = 0.125;
+F2 = F0 * F2;
+F1 = MIN(F1, F2);
+DM(95, I0) = F1;
+F0 = F0 - F1;
+DM(96, I0) = F0;
+F0 = DM(73, I0);
+R0 = TRUNC F0;
+DM(106, I0) = R0;
+F0 = FLOAT R0;
+F1 = DM(73, I0);
+COMP(F0, F1);
+IF GE JUMP ml_geometry_ceil;
+R0 = DM(106, I0);
+R0 = R0 + 1;
+DM(106, I0) = R0;
+ml_geometry_ceil:
+R0 = 16;
+DM(66, I0) = R0;
+// One 48 kHz host frame; clock divider controls internal ticks.
+ml_sample:
+F0 = DM(I4, 1);
+DM(67, I0) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_input_done;
+F0 = DM(15, I4);
+DM(68, I0) = F0;
+ml_input_done:
+R0 = DM(30, I0);
+R0 = R0 + 1;
+DM(30, I0) = R0;
+R1 = DM(29, I0);
+COMP(R0, R1);
+IF LT JUMP ml_notick_22;
+R0 = 0;
+DM(30, I0) = R0;
+F0 = DM(39, I0);
+DM(41, I0) = F0;
+F0 = 0.0;
+DM(69, I0) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_previous_right_done;
+F0 = DM(40, I0);
+DM(42, I0) = F0;
+F0 = 0.0;
+DM(70, I0) = F0;
+ml_previous_right_done:
+R0 = DM(26, I0);
+R0 = PASS R0;
+IF EQ JUMP ml_record_23;
+F0 = DM(67, I0);
+F0 = ABS F0;
+R5 = PASS R5;
+IF EQ JUMP ml_energy_right_done;
+F1 = DM(68, I0);
+F1 = ABS F1;
+F0 = MAX(F0, F1);
+ml_energy_right_done:
+DM(71, I0) = F0;
+F1 = DM(36, I0);
+COMP(F0, F1);
+IF GT JUMP ml_attack_24;
+F0 = DM(36, I0);
+F1 = DM(71, I0);
+F1 = F1 - F0;
+F2 = 0.0008;
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(36, I0) = F0;
+JUMP ml_envdone_25;
+ml_attack_24:
+F0 = DM(36, I0);
+F1 = DM(71, I0);
+F1 = F1 - F0;
+F2 = 0.02;
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(36, I0) = F0;
+ml_envdone_25:
+R0 = DM(5, I0);
+R0 = PASS R0;
+IF EQ JUMP ml_envelope_26;
+R0 = DM(5, I0);
+R1 = 2;
+COMP(R0, R1);
+IF EQ JUMP ml_stretch_27;
+F0 = DM(31, I0);
+DM(72, I0) = F0;
+CALL ml_read;
+F0 = DM(74, I0);
+DM(69, I0) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_read_result_right_done_a;
+F0 = DM(75, I0);
+DM(70, I0) = F0;
+ml_read_result_right_done_a:
+F0 = DM(31, I0);
+F1 = DM(61, I0);
+F0 = F0 + F1;
+DM(76, I0) = F0;
+F0 = DM(96, I0);
+DM(77, I0) = F0;
+CALL ml_wrap;
+F0 = DM(78, I0);
+DM(31, I0) = F0;
+DM(32, I0) = F0;
+JUMP ml_modedone_28;
+ml_envelope_26:
+F0 = DM(65, I0);
+DM(79, I0) = F0;
+R0 = DM(37, I0);
+R0 = PASS R0;
+IF EQ JUMP ml_noheld_29;
+F0 = DM(65, I0);
+F1 = 0.7;
+F0 = F0 * F1;
+DM(79, I0) = F0;
+ml_noheld_29:
+F0 = DM(36, I0);
+F1 = DM(79, I0);
+COMP(F0, F1);
+IF LE JUMP ml_notdetected_30;
+R0 = DM(37, I0);
+R0 = PASS R0;
+IF NE JUMP ml_alreadyheld_31;
+F0 = DM(32, I0);
+DM(38, I0) = F0;
+F0 = 0.0;
+DM(31, I0) = F0;
+ml_alreadyheld_31:
+R0 = 1;
+DM(37, I0) = R0;
+F0 = DM(31, I0);
+DM(76, I0) = F0;
+F0 = DM(56, I0);
+DM(77, I0) = F0;
+CALL ml_wrap;
+F0 = DM(78, I0);
+DM(31, I0) = F0;
+F0 = DM(38, I0);
+F1 = DM(31, I0);
+F0 = F0 + F1;
+DM(72, I0) = F0;
+CALL ml_read;
+F0 = 32.0;
+F1 = DM(56, I0);
+F2 = 0.125;
+F1 = F1 * F2;
+F0 = MIN(F0, F1);
+DM(80, I0) = F0;
+F0 = 1.0;
+F1 = DM(31, I0);
+F2 = DM(56, I0);
+F3 = DM(31, I0);
+F2 = F2 - F3;
+F1 = MIN(F1, F2);
+F2 = DM(80, I0);
+F14 = RECIPS F2;
+F15 = F2 * F14;
+F13 = 2.0;
+F15 = F13 - F15;
+F14 = F14 * F15;
+F15 = F2 * F14;
+F15 = F13 - F15;
+F14 = F14 * F15;
+F1 = F1 * F14;
+F0 = MIN(F0, F1);
+DM(81, I0) = F0;
+F0 = DM(74, I0);
+F1 = DM(81, I0);
+F0 = F0 * F1;
+DM(69, I0) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_envelope_right_done;
+F0 = DM(75, I0);
+F1 = DM(81, I0);
+F0 = F0 * F1;
+DM(70, I0) = F0;
+ml_envelope_right_done:
+F0 = DM(31, I0);
+F1 = 1.0;
+F0 = F0 + F1;
+DM(76, I0) = F0;
+F0 = DM(56, I0);
+DM(77, I0) = F0;
+CALL ml_wrap;
+F0 = DM(78, I0);
+DM(31, I0) = F0;
+JUMP ml_modedone_28;
+ml_notdetected_30:
+R0 = 0;
+DM(37, I0) = R0;
+F0 = DM(32, I0);
+DM(72, I0) = F0;
+CALL ml_read;
+F0 = DM(74, I0);
+DM(69, I0) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_read_result_right_done_b;
+F0 = DM(75, I0);
+DM(70, I0) = F0;
+ml_read_result_right_done_b:
+F0 = DM(32, I0);
+F1 = 1.0;
+F0 = F0 + F1;
+DM(76, I0) = F0;
+F0 = DM(96, I0);
+DM(77, I0) = F0;
+CALL ml_wrap;
+F0 = DM(78, I0);
+DM(32, I0) = F0;
+JUMP ml_modedone_28;
+ml_stretch_27:
+F0 = DM(33, I0);
+DM(82, I0) = F0;
+F0 = DM(33, I0);
+F1 = 0.5;
+F0 = F0 + F1;
+DM(76, I0) = F0;
+F0 = 1.0;
+DM(77, I0) = F0;
+CALL ml_wrap;
+F0 = DM(78, I0);
+DM(83, I0) = F0;
+F0 = 1.0;
+F1 = DM(82, I0);
+F2 = 2.0;
+F1 = F1 * F2;
+F2 = 1.0;
+F1 = F1 - F2;
+F1 = ABS F1;
+F0 = F0 - F1;
+DM(84, I0) = F0;
+F0 = DM(34, I0);
+F1 = DM(82, I0);
+F2 = DM(57, I0);
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(72, I0) = F0;
+CALL ml_read;
+F0 = DM(69, I0);
+F1 = DM(74, I0);
+F2 = DM(84, I0);
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(69, I0) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_grain0_right_done;
+F0 = DM(70, I0);
+F1 = DM(75, I0);
+F2 = DM(84, I0);
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(70, I0) = F0;
+ml_grain0_right_done:
+F0 = 1.0;
+F1 = DM(83, I0);
+F2 = 2.0;
+F1 = F1 * F2;
+F2 = 1.0;
+F1 = F1 - F2;
+F1 = ABS F1;
+F0 = F0 - F1;
+DM(84, I0) = F0;
+F0 = DM(35, I0);
+F1 = DM(83, I0);
+F2 = DM(57, I0);
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(72, I0) = F0;
+CALL ml_read;
+F0 = DM(69, I0);
+F1 = DM(74, I0);
+F2 = DM(84, I0);
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(69, I0) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_grain1_right_done;
+F0 = DM(70, I0);
+F1 = DM(75, I0);
+F2 = DM(84, I0);
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(70, I0) = F0;
+ml_grain1_right_done:
+F0 = DM(32, I0);
+F1 = DM(58, I0);
+F0 = F0 + F1;
+DM(76, I0) = F0;
+F0 = DM(96, I0);
+DM(77, I0) = F0;
+CALL ml_wrap;
+F0 = DM(78, I0);
+DM(32, I0) = F0;
+F0 = DM(33, I0);
+F1 = DM(59, I0);
+F0 = F0 + F1;
+DM(85, I0) = F0;
+F0 = DM(33, I0);
+F1 = 0.5;
+COMP(F0, F1);
+IF GE JUMP ml_anchor1done_32;
+F0 = DM(85, I0);
+F1 = 0.5;
+COMP(F0, F1);
+IF LT JUMP ml_anchor1done_32;
+F0 = DM(32, I0);
+DM(35, I0) = F0;
+ml_anchor1done_32:
+F0 = DM(85, I0);
+F1 = 1.0;
+COMP(F0, F1);
+IF LT JUMP ml_anchor0done_33;
+F0 = DM(32, I0);
+DM(34, I0) = F0;
+ml_anchor0done_33:
+F0 = DM(85, I0);
+DM(76, I0) = F0;
+F0 = 1.0;
+DM(77, I0) = F0;
+CALL ml_wrap;
+F0 = DM(78, I0);
+DM(33, I0) = F0;
+F0 = DM(32, I0);
+DM(31, I0) = F0;
+ml_modedone_28:
+R0 = DM(111, I0);
+R0 = PASS R0;
+IF EQ JUMP ml_nodub_34;
+R0 = DM(23, I0);
+R1 = DM(25, I0);
+R0 = R0 + R1;
+DM(86, I0) = R0;
+R1 = 24000;
+COMP(R0, R1);
+IF LT JUMP ml_dubidx_35;
+R0 = DM(86, I0);
+R1 = 24000;
+R0 = R0 - R1;
+DM(86, I0) = R0;
+ml_dubidx_35:
+R0 = DM(86, I0);
+R0 = LSHIFT R0 BY R5;
+R1 = DM(12, I0);
+R0 = R0 + R1;
+I6 = R0;
+F0 = DM(0, I6);
+DM(87, I0) = F0;
+F0 = 1.0;
+F1 = -1.0;
+F2 = DM(87, I0);
+F3 = 0.9995;
+F2 = F2 * F3;
+F3 = DM(67, I0);
+F4 = 0.5;
+F3 = F3 * F4;
+F2 = F2 + F3;
+F1 = MAX(F1, F2);
+F0 = MIN(F0, F1);
+DM(0, I6) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_dub_right_done;
+F0 = 1.0;
+F1 = -1.0;
+F2 = DM(1, I6);
+F3 = 0.9995;
+F2 = F2 * F3;
+F3 = DM(68, I0);
+F4 = 0.5;
+F3 = F3 * F4;
+F2 = F2 + F3;
+F1 = MAX(F1, F2);
+F0 = MIN(F0, F1);
+DM(1, I6) = F0;
+ml_dub_right_done:
+R0 = DM(25, I0);
+R0 = R0 + 1;
+DM(25, I0) = R0;
+R1 = DM(24, I0);
+COMP(R0, R1);
+IF LT JUMP ml_dubok_36;
+R0 = 0;
+DM(25, I0) = R0;
+ml_dubok_36:
+ml_nodub_34:
+JUMP ml_tickblend_37;
+ml_record_23:
+R0 = DM(21, I0);
+R0 = LSHIFT R0 BY R5;
+R1 = DM(12, I0);
+R0 = R0 + R1;
+I6 = R0;
+F0 = 1.0;
+F1 = -1.0;
+F2 = DM(67, I0);
+F1 = MAX(F1, F2);
+F0 = MIN(F0, F1);
+DM(0, I6) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_record_right_done;
+F0 = 1.0;
+F1 = -1.0;
+F2 = DM(68, I0);
+F1 = MAX(F1, F2);
+F0 = MIN(F0, F1);
+DM(1, I6) = F0;
+ml_record_right_done:
+R0 = DM(21, I0);
+R0 = R0 + 1;
+DM(21, I0) = R0;
+R1 = 24000;
+COMP(R0, R1);
+IF LT JUMP ml_writeok_38;
+R0 = 0;
+DM(21, I0) = R0;
+ml_writeok_38:
+R0 = DM(22, I0);
+R0 = R0 + 1;
+DM(22, I0) = R0;
+R1 = 24000;
+COMP(R0, R1);
+IF LE JUMP ml_countok_39;
+R0 = 24000;
+DM(22, I0) = R0;
+ml_countok_39:
+ml_tickblend_37:
+F0 = DM(47, I0);
+F1 = 1.0;
+COMP(F0, F1);
+IF GE JUMP ml_blenddone_40;
+F0 = 1.0;
+F1 = DM(47, I0);
+F2 = 0.004166666666666667;
+F1 = F1 + F2;
+F0 = MIN(F0, F1);
+DM(47, I0) = F0;
+F0 = DM(43, I0);
+F1 = 1.0;
+F2 = DM(47, I0);
+F1 = F1 - F2;
+F0 = F0 * F1;
+F1 = DM(69, I0);
+F2 = DM(47, I0);
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(69, I0) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_transition_right_done;
+F0 = DM(44, I0);
+F1 = 1.0;
+F2 = DM(47, I0);
+F1 = F1 - F2;
+F0 = F0 * F1;
+F1 = DM(70, I0);
+F2 = DM(47, I0);
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(70, I0) = F0;
+ml_transition_right_done:
+ml_blenddone_40:
+F0 = DM(69, I0);
+DM(39, I0) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_held_right_done;
+F0 = DM(70, I0);
+DM(40, I0) = F0;
+ml_held_right_done:
+ml_notick_22:
+CALL ml_reconstruct_mix;
+ml_mixsnap_41:
+R0 = DM(26, I0);
+F0 = FLOAT R0;
+DM(92, I0) = F0;
+F0 = DM(46, I0);
+F1 = DM(92, I0);
+F1 = F1 - F0;
+F2 = 0.002;
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(46, I0) = F0;
+F0 = DM(92, I0);
+F1 = DM(46, I0);
+F0 = F0 - F1;
+F0 = ABS F0;
+F1 = 0.0001;
+COMP(F0, F1);
+IF GE JUMP ml_gainsnap_42;
+F0 = DM(92, I0);
+DM(46, I0) = F0;
+ml_gainsnap_42:
+F0 = DM(45, I0);
+F1 = DM(46, I0);
+F0 = F0 * F1;
+DM(93, I0) = F0;
+F0 = 1.0;
+F1 = -1.0;
+F2 = DM(67, I0);
+F3 = 1.0;
+F4 = DM(93, I0);
+F3 = F3 - F4;
+F2 = F2 * F3;
+F3 = DM(90, I0);
+F4 = DM(93, I0);
+F3 = F3 * F4;
+F2 = F2 + F3;
+F1 = MAX(F1, F2);
+F0 = MIN(F0, F1);
+DM(I5, 1) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_output_right_done;
+F0 = 1.0;
+F1 = -1.0;
+F2 = DM(68, I0);
+F3 = 1.0;
+F4 = DM(93, I0);
+F3 = F3 - F4;
+F2 = F2 * F3;
+F3 = DM(91, I0);
+F4 = DM(93, I0);
+F3 = F3 * F4;
+F2 = F2 + F3;
+F1 = MAX(F1, F2);
+F0 = MIN(F0, F1);
+DM(15, I5) = F0;
+ml_output_right_done:
+R0 = DM(66, I0);
+R0 = R0 - 1;
+DM(66, I0) = R0;
+R0 = PASS R0;
+IF GT JUMP ml_sample;
+JUMP ml_return;
+ml_invalid:
+R0 = DM(48, I0);
+R0 = R0 + 1;
+DM(48, I0) = R0;
+R0 = 16;
+R0 = LSHIFT R0 BY R5;
+LCNTR = R0, DO ml_badlast UNTIL LCE;
+R0 = DM(I4, 1);
+ml_badlast: DM(I5, 1) = R0;
+JUMP ml_return;
+// Wrap positive/negative finite positions with positive extent.
+ml_wrap:
+// Exact no-wrap / one-wrap paths; distant positions use binary remainder.
+F0 = DM(76, I0);
+F1 = DM(77, I0);
+F2 = 0.0;
+COMP(F0, F2);
+IF LT JUMP ml_wrap_negative_fast;
+COMP(F0, F1);
+IF LT JUMP ml_wrap_store;
+F2 = F1 + F1;
+COMP(F0, F2);
+IF GE JUMP ml_wrap_slow;
+F0 = F0 - F1;
+JUMP ml_wrap_store;
+ml_wrap_negative_fast:
+F2 = -F1;
+COMP(F0, F2);
+IF LE JUMP ml_wrap_slow;
+F0 = F0 + F1;
+JUMP ml_wrap_store;
+ml_wrap_slow:
+F0 = ABS F0;
+R3 = 0;
+ml_wrap_scale:
+F2 = F1 + F1;
+COMP(F2, F0);
+IF GT JUMP ml_wrap_reduce;
+F1 = PASS F2;
+R3 = R3 + 1;
+R2 = 32;
+COMP(R3, R2);
+IF LT JUMP ml_wrap_scale;
+ml_wrap_reduce:
+COMP(F0, F1);
+IF LT JUMP ml_wrap_nosubtract;
+F0 = F0 - F1;
+ml_wrap_nosubtract:
+R3 = PASS R3;
+IF EQ JUMP ml_wrap_sign;
+F2 = 0.5;
+F1 = F1 * F2;
+R3 = R3 - 1;
+JUMP ml_wrap_reduce;
+ml_wrap_sign:
+R1 = DM(76, I0);
+R2 = 0x80000000;
+R1 = R1 AND R2;
+R0 = R0 XOR R1;
+F1 = 0.0;
+COMP(F0, F1);
+IF GE JUMP ml_wrap_store;
+F1 = DM(77, I0);
+F0 = F0 + F1;
+ml_wrap_store:
+DM(78, I0) = F0;
+RTS (LR);
+// Corrected head/tail crossfade splice, returns both stereo channels.
+ml_read:
+F0 = DM(72, I0);
+DM(76, I0) = F0;
+F0 = DM(96, I0);
+DM(77, I0) = F0;
+CALL ml_wrap;
+F0 = DM(78, I0);
+DM(72, I0) = F0;
+F1 = DM(95, I0);
+COMP(F0, F1);
+IF GE JUMP ml_headonly_45;
+F0 = DM(96, I0);
+F1 = DM(72, I0);
+F0 = F0 + F1;
+DM(97, I0) = F0;
+CALL ml_at;
+F0 = DM(98, I0);
+DM(99, I0) = F0;
+F0 = DM(100, I0);
+DM(101, I0) = F0;
+F0 = DM(72, I0);
+DM(97, I0) = F0;
+CALL ml_at;
+F0 = DM(72, I0);
+F1 = DM(95, I0);
+F14 = RECIPS F1;
+F15 = F1 * F14;
+F13 = 2.0;
+F15 = F13 - F15;
+F14 = F14 * F15;
+F15 = F1 * F14;
+F15 = F13 - F15;
+F14 = F14 * F15;
+F4 = F0 * F14;
+F3 = 1.0;
+F3 = F3 - F4;
+F0 = DM(99, I0);
+F0 = F0 * F3;
+F1 = DM(98, I0);
+F1 = F1 * F4;
+F0 = F0 + F1;
+DM(74, I0) = F0;
+R5 = PASS R5;
+IF EQ RTS (LR);
+F0 = DM(101, I0);
+F0 = F0 * F3;
+F1 = DM(100, I0);
+F1 = F1 * F4;
+F0 = F0 + F1;
+DM(75, I0) = F0;
+RTS (LR);
+ml_headonly_45:
+F0 = DM(72, I0);
+DM(97, I0) = F0;
+CALL ml_at;
+F0 = DM(98, I0);
+DM(74, I0) = F0;
+R5 = PASS R5;
+IF EQ RTS (LR);
+F0 = DM(100, I0);
+DM(75, I0) = F0;
+RTS (LR);
+// Linear interpolation inside the captured region.
+ml_at:
+// Keep the interpolation coordinates and pair of samples in saved GPRs.
+// This is the same arithmetic order as the original scratch-DM path.
+F0 = DM(97, I0);
+F4 = PASS F0;
+R0 = TRUNC F0;
+F1 = FLOAT R0;
+F4 = F4 - F1;
+R2 = R0;
+R3 = R0 + 1;
+R14 = DM(106, I0);
+COMP(R3, R14);
+IF LT JUMP ml_bok_47;
+R3 = 0;
+ml_bok_47:
+R0 = DM(23, I0);
+R1 = R0 + R2;
+R3 = R0 + R3;
+R0 = 24000;
+COMP(R1, R0);
+IF LT JUMP ml_atidx_48;
+R1 = R1 - R0;
+ml_atidx_48:
+COMP(R3, R0);
+IF LT JUMP ml_atidx_49;
+R3 = R3 - R0;
+ml_atidx_49:
+R1 = LSHIFT R1 BY R5;
+R3 = LSHIFT R3 BY R5;
+R0 = DM(12, I0);
+R1 = R1 + R0;
+R13 = R3 + R0;
+I6 = R1;
+F2 = DM(0, I6);
+I6 = R13;
+F0 = DM(0, I6);
+F0 = F0 - F2;
+F0 = F0 * F4;
+F0 = F2 + F0;
+DM(98, I0) = F0;
+R5 = PASS R5;
+IF EQ RTS (LR);
+I6 = R1;
+F3 = DM(1, I6);
+I6 = R13;
+F1 = DM(1, I6);
+F1 = F1 - F3;
+F1 = F1 * F4;
+F1 = F3 + F1;
+DM(100, I0) = F1;
+RTS (LR);
+// Exact per-frame reconstruction and mix smoothing; no extra state.
+ml_reconstruct_mix:
+// ticks/divider is exact binary scaling: divider=2^step, ticks<16.
+R0 = DM(30, I0);
+F0 = FLOAT R0;
+R1 = DM(28, I0);
+R1 = -R1;
+F0 = SCALB F0 BY R1;
+DM(89, I0) = F0;
+F0 = DM(41, I0);
+F1 = DM(39, I0);
+F1 = F1 - F0;
+F2 = DM(89, I0);
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(90, I0) = F0;
+R5 = PASS R5;
+IF EQ JUMP ml_reconstruct_right_done;
+F0 = DM(42, I0);
+F1 = DM(40, I0);
+F1 = F1 - F0;
+F2 = DM(89, I0);
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(91, I0) = F0;
+ml_reconstruct_right_done:
+F0 = DM(45, I0);
+F1 = DM(52, I0);
+F1 = F1 - F0;
+F2 = 0.002;
+F1 = F1 * F2;
+F0 = F0 + F1;
+DM(45, I0) = F0;
+F0 = DM(52, I0);
+F1 = DM(45, I0);
+F0 = F0 - F1;
+F0 = ABS F0;
+F1 = 0.0001;
+COMP(F0, F1);
+IF GE JUMP ml_reconstruct_mix_done;
+F0 = DM(52, I0);
+DM(45, I0) = F0;
+ml_reconstruct_mix_done:
+RTS (LR);
+ml_return:
+R0 = DM(145, I0);
+I4 = R0;
+R0 = DM(146, I0);
+L4 = R0;
+R0 = DM(147, I0);
+I5 = R0;
+R0 = DM(148, I0);
+L5 = R0;
+R0 = DM(149, I0);
+I6 = R0;
+R0 = DM(150, I0);
+L6 = R0;
+R0 = DM(129, I0);
+R1 = DM(130, I0);
+R2 = DM(131, I0);
+R3 = DM(132, I0);
+R4 = DM(133, I0);
+R5 = DM(134, I0);
+R13 = DM(142, I0);
+R14 = DM(143, I0);
+R15 = DM(144, I0);
+MODE1 = DM(128, I0);
+NOP;
+RTS (LR);

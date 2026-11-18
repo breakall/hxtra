@@ -265,6 +265,14 @@ https://github.com/user-attachments/assets/f25be41c-3ab0-45a1-87fa-99cd50194933
 
 </div>
 
+## <img src="docs/assets/icons/atmosphere.svg" width="35" height="28" align="top" alt=""> Atmosphere micro looper
+
+Mono and stereo micro-looping with Envelope, Tape and Stretch modes. Assign
+Loop to a Momentary footswitch through Controller Assign: tap to capture or
+return to listening, hold to overdub. Bypass Assign keeps its normal behavior.
+Include it in a command-line build with `HX_MICRO_LOOPER=1`; see
+[Atmosphere controls and build configuration](docs/atmosphere.md).
+
 ## Engineering
 
 <table>

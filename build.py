@@ -16,6 +16,11 @@ Amp > NAM > NAM A2 Lite, ten knobs: Input, Treble, Output, Polarity, Bass,
 Mid, Model, Mid Freq, Q, High Cut (on the HX Effects: Distortion > Mono). The XL and HX Effects builds
 have not run on those units. See STEPS.
 
+HX_MICRO_LOOPER=1 adds mono and stereo Atmosphere in external DSP memory,
+preserving the same NAM profile as a build without Atmosphere support.
+HX_MICRO_LOOPER_DSP_COST sets the stereo charge; HX_MICRO_LOOPER_MONO_DSP_COST
+sets the mono charge. See docs/atmosphere.md.
+
 Steps:
   1. tools/sharc/nam_multi.py: the SHARC kernel, checked in the simulator
      against src/sharc/nam_a2.asm bit for bit, each block on its own capture
@@ -31,6 +36,7 @@ Steps:
   5. tools/hxf.py pack: the .hxf
 """
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -70,9 +76,26 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def kernel(unit, gr=None):
-    """KERNEL[unit], with GR_SLOTS on an HX Stomp build with the GR meter (gr, else HX_GR)."""
+    """Select the NAM profile required by the enabled effects."""
     gr = os.environ.get("HX_GR") if gr is None else gr
     return KERNEL[unit] + (GR_SLOTS if gr and unit == "HX_Stomp" else [])
+
+
+def microlooper_cost(unit, *, mono=False):
+    """Read the native DSP charge for the selected Atmosphere width."""
+    if not os.environ.get('HX_MICRO_LOOPER'):
+        return None
+    if unit != 'HX_Stomp':
+        raise SystemExit('HX_MICRO_LOOPER currently targets HX Stomp only')
+    variable = 'HX_MICRO_LOOPER_MONO_DSP_COST' if mono else 'HX_MICRO_LOOPER_DSP_COST'
+    raw = os.environ.get(variable, os.environ.get('HX_MICRO_LOOPER_DSP_COST', '') if mono else '')
+    try:
+        cost = int(raw)
+    except ValueError:
+        raise SystemExit(f'{variable} must be an explicit integer in 1..7500')
+    if not 1 <= cost <= 7500:
+        raise SystemExit(f'{variable} must be an explicit integer in 1..7500')
+    return cost
 
 
 def run(*args):
@@ -95,6 +118,8 @@ def main():
         sys.exit(f"{stock}: MD5 {md5}, not the HX Stomp, HX Stomp XL or HX Effects 3.80.0 firmware. "
                  "The patch is made for those files only.")
     unit = STOCK_MD5[md5]
+    micro_cost = microlooper_cost(unit)
+    micro_mono_cost = microlooper_cost(unit, mono=True)
     print(f"stock firmware: {unit.replace('_', ' ')} 3.80.0")
     splash = os.path.abspath(argv[argv.index("--splash") + 1]) if "--splash" in argv else None
     splash_text = argv[argv.index("--splash-text") + 1] if "--splash-text" in argv else None
@@ -128,6 +153,10 @@ def main():
             os.remove(src)
         src = dst
     base = src
+    if micro_cost is not None:
+        run(py, 'tools/patch_microlooper_build.py', 'metadata', base, titled,
+            '--dsp-cost', str(micro_cost), '--mono-dsp-cost', str(micro_mono_cost))
+        os.replace(titled, base)
     if unit == "HX_Stomp":
         run(py, "tools/patch_menu.py", base, titled, "--cwd", os.getcwd())
         os.replace(titled, base)
@@ -139,12 +168,27 @@ def main():
         # last: every step that adds a model rebuilds the Entry 3 and 4 tails the knobs live in
         run(py, "tools/patch_comp.py", image, titled)
         os.replace(titled, image)
+    if micro_cost is not None:
+        run(py, 'tools/patch_microlooper_build.py', 'dsp', image, titled,
+            '--report', os.path.join(build, 'microlooper-build.json'))
+        os.replace(titled, image)
     report = run(py, "tools/l6ia_verify.py", image)
     if "ALL OK" not in report:
         sys.exit("build.py: the image failed its checksum check")
     run(py, "tools/hxf.py", "pack", image, out, "--donor", stock)
     os.remove(base)
-    print(f"\nDone: {out}\nInstall it with Line 6 Updater (Choose File); see README.md first.")
+    if micro_cost is not None:
+        report_path = os.path.join(build, 'microlooper-build.json')
+        with open(report_path) as report_file:
+            micro_report = json.load(report_file)
+        micro_report.update(stock_hxf_md5=md5, output_hxf=out,
+                            output_hxf_md5=hashlib.md5(open(out, 'rb').read()).hexdigest())
+        with open(report_path, 'w') as report_file:
+            json.dump(micro_report, report_file, indent=2)
+            report_file.write('\n')
+        print(f'\nDone: {out}\nAtmosphere mono and stereo are included; see docs/atmosphere.md.')
+    else:
+        print(f"\nDone: {out}\nInstall it with Line 6 Updater (Choose File); see README.md first.")
 
 
 if __name__ == "__main__":

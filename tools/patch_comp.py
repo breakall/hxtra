@@ -330,10 +330,10 @@ def nw(pm):
     return nam_multi.NW3 + (pm - nam_multi.NW3) * 3 // 2
 
 
-def dsp_place():
+def dsp_place(lay=None):
     """(DM base, PM base) of frame_probe.asm: its data right above NAM's slots, then its code, clear of the
     Metronome's kernel under NAM's cold code (there in every build, so GR builds share one layout)."""
-    lay = patch_click.nam_layout(gr=True)
+    lay = lay or patch_click.nam_layout(gr=True)
     secs, _ = pa.sasm.assemble(dsp_asm(nam_multi.B3, nam_multi.NW3), 'frame_probe.asm')
     n_dm, n_pm = (sum(len(s.words) for s in secs if s.kind == k) for k in ('dm', 'pm'))
     dm = lay.b3_to
@@ -346,9 +346,9 @@ def dsp_place():
     return dm, pm
 
 
-def patch_dsp(l6ia_bytes, log=print):
+def patch_dsp(l6ia_bytes, log=print, *, lay=None):
     """Entry 2: frame_probe.asm at dsp_place(), and each core of WRAPS entering it, its control function too."""
-    dm, pm = dsp_place()
+    dm, pm = dsp_place(lay)
     secs, syms = pa.sasm.assemble(dsp_asm(dm, pm), 'frame_probe.asm')
     entries = pa.l6ia.parse(l6ia_bytes)
     e2 = l6ia_bytes[entries[2]['payload_off']: entries[2]['payload_off'] + entries[2]['payload_len']]

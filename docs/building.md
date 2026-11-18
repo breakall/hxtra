@@ -40,9 +40,15 @@ HX_TUNER=1 HX_BPM=1 HX_DSP_METER=1 HX_BREATHING_LINE=1 HX_LONG_PRESS=1 HX_MORE_S
   python3 build.py path/to/HX_Stomp_v3.80.0_0x103966115.hxf
 ```
 
+## Atmosphere
+
+Include the mono and stereo micro looper with `HX_MICRO_LOOPER=1`. Its
+[build command, controls and implementation](atmosphere.md) describe the native
+Loop controller assignment, separate bypass and per-instance storage.
+
 ## Build in the browser
 
-The setup page, **[wisemandenny.github.io/hxtra](https://wisemandenny.github.io/hxtra/web/)**, does the same build in the browser, with nothing uploaded: you drop your stock `.hxf` and download `HX_Stomp_v3.80.0_HXtra.hxf`, with every feature on, the Metronome block included, and Real block names if you tick their box. It also runs the build from RAM and converts `.nam` captures, and it reads in 10 languages. It runs `build.py`'s own commands in [Pyodide](https://pyodide.org) (`web/firmware-worker.js`); its builds have the same MD5s as `build.py`'s.
+The setup page, **[wisemandenny.github.io/hxtra](https://wisemandenny.github.io/hxtra/web/)**, does the same build in the browser, with nothing uploaded: you drop your stock `.hxf` and download `HX_Stomp_v3.80.0_HXtra.hxf`, with the standard web features on, the Metronome block included, and Real block names if you tick their box. It also runs the build from RAM and converts `.nam` captures, and it reads in 10 languages. It runs `build.py`'s own commands in [Pyodide](https://pyodide.org) (`web/firmware-worker.js`); its builds have the same MD5s as `build.py`'s.
 
 The browser has no clang to assemble the features' M4 code, so each release brings that code made in advance: `tools/m4cache.py` runs the page's features on the stock file and keeps what each module assembled to, in `m4cache.json`, with the MD5 of the build, and `tools/m4asm.py` reads it when `HX_M4_CACHE` names it. The page compares its build with that MD5 and says **Verified**. The page runs `build.py`'s other steps for them too: the Metronome block (`tools/patch_click.py`), and the GR meter's knobs and DSP code (`tools/patch_comp.py`, with NAM on two slots). A copy of the page served from a checkout (`python3 -m http.server`, then `/web/`) has no `m4cache.json` and builds without features, unless you make one: `python3 tools/m4cache.py path/to/HX_Stomp_v3.80.0_0x103966115.hxf -o m4cache.json`.
 

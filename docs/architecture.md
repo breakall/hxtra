@@ -27,6 +27,11 @@ HXtra forks it at upstream commit `2e80164`, has merged upstream up to `01c0bb0`
 - **The DSP.** The audio runs on an Analog Devices SHARC ADSP-21469. Kernels are hand-written SHARC assembly, assembled by `tools/sharc/sasm.py` and simulated by `tools/sharc/ssim.py`, with no vendor toolchain. A custom kernel is hooked to an unused DSP primitive.
 - **NAM captures through the IR slots.** The HX Stomp already stores up to 128 User IRs of 2,048 samples and hands them to the DSP unchanged. `nam2ir.py` packs a capture's weights into those samples, behind a small header the kernel recognises.
 - **The NAM block.** `tools/patch_amp.py` builds the block's DSP graph, parameter map and menu entries on Xenomorph Fuzz Mono's identity, with the NAM kernel as its DSP stage (`build.py`'s `STEPS`).
+- **Atmosphere.** `tools/microlooper_definition.py` declares mono/stereo models,
+  controls, native allocations and DSP callbacks. The build registers metadata
+  before M4 feature installation and links the shared audio kernel after the
+  other DSP additions. Native Controller Assign supplies the Loop footswitch;
+  bypass remains independent. See [Atmosphere](atmosphere.md).
 
 The [research notes](research/INDEX.md) have the details: addresses, the M4-to-DSP frame format, the Settings and Home screen internals, and the open problems. Start from their index.
 
