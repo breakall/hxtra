@@ -97,6 +97,16 @@ must not trigger capture or overdub on load or snapshot recall. Its existing
 restore filters remain part of the effect's control integration until a shared
 implementation can preserve the same behavior.
 
+Atmosphere's visible **Loop** parameter is the explicit Controller Assign target.
+Native assignment records own the FS1–FS5 selection and its per-switch Momentary
+setting. Physical events from that assignment feed the gesture module; ordinary
+bypass assignments keep their native meaning. Loop is public slot 6/PID 15, with
+hidden Play/Overdub at slots 7/8 and unchanged DSP PIDs 10/11. Restoring a Loop
+parameter value is not a physical press and must not trigger a gesture. The
+adapter snapshots controller records outside graph ownership, then verifies a
+lifecycle epoch before resolving their block IDs; it does not nest the two
+mutexes. See [the current control contract](research/features/microlooper-switch.md#explicit-loop-controller-assignment).
+
 ## Shared module responsibilities
 
 Build one effect module around the existing graph, assembler, container and M4

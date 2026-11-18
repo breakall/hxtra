@@ -91,7 +91,7 @@ SHORT_COUNT_KINDS = {8, 9, 15, 16}
 # Parameter values to use when neither the preset nor the factory presets have the model:
 # 572 "Kit Probe" has one parameter; the unit's edit buffer held [0.5] on 2026-10-28.
 # Native delays append one false value after the declared controls. This keeps
-# Atmosphere's seven direct parameters plus the native count8/direct-count7 shape.
+# Atmosphere's eight direct parameters plus the native count9/direct-count8 shape.
 KNOWN_PARAMS = {
     572: [0.5],
     **{effect.preset_id: [bool(p.default) if p.type == 1 else

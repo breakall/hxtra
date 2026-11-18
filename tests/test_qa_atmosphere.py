@@ -11,7 +11,7 @@ def empty_sections():
 
 
 @pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
-def test_atmosphere_defaults_round_trip_as_native_delay_with_seven_direct_controls(monkeypatch, model):
+def test_atmosphere_defaults_round_trip_as_native_delay_with_eight_direct_controls(monkeypatch, model):
     # New effects are absent from the factory presets. The helper must know
     # their shape without deriving it from an unrelated stock delay's knobs.
     monkeypatch.setattr(hx_ctl, 'find_kind_and_params', lambda *_: (None, None))
@@ -21,20 +21,20 @@ def test_atmosphere_defaults_round_trip_as_native_delay_with_seven_direct_contro
     block = hx_ctl.blocks(restored)[1][20]
     assert block[24] == {23: False, 25: model, 26: -1}
     assert block[9] == 8 and block[10] is True
-    assert block[11][2] == 8 and block[11][3] == 7
-    assert block[11][4] == [1, .5, .75, 1., .5, False, False, False]
-    assert [type(value) for value in block[11][4]] == [int, float, float, float, float, bool, bool, bool]
+    assert block[11][2] == 9 and block[11][3] == 8
+    assert block[11][4] == [1, .5, .75, 1., .5, False, False, False, False]
+    assert [type(value) for value in block[11][4]] == [int, float, float, float, float, bool, bool, bool, bool]
 
 
 @pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
 def test_atmosphere_explicit_native_values_are_preserved(monkeypatch, model):
     monkeypatch.setattr(hx_ctl, 'find_kind_and_params', lambda *_: (None, None))
-    values = [2, .2, .3, .4, .6, False, False, False]
+    values = [2, .2, .3, .4, .6, True, False, False, False]
     sec = empty_sections()
     hx_ctl.set_model(sec, 0, 0, model, params=values)
     block = hx_ctl.blocks(sec)[1][20]
     assert block[9] == 8
-    assert block[11] == {2: 8, 3: 7, 4: values}
+    assert block[11] == {2: 9, 3: 8, 4: values}
 
 
 

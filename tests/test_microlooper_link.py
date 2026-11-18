@@ -169,7 +169,8 @@ def test_final_graph_routing_and_initial_transport_defaults_are_verified(profile
     e4 = kit.get_entry_swapped(profile_image, 4)
     words = struct.unpack(f'<{len(e4)//4}I', e4)
     blob = list(kit.entry4_blob.blob(words, item['blob_index']))
-    pmap, count, play = blob[6], len(build.EFFECT.parameters), 5
+    pmap, count = blob[6], len(build.EFFECT.parameters)
+    play = next(p.state_index for p in build.EFFECT.parameters if p.name == 'Play')
     if change == 'transport_pid':
         writer = pmap+blob[pmap]+10*(count+play)
         blob[pmap+blob[writer]+1] = 11  # Play's slot must target PID10, never Overdub.

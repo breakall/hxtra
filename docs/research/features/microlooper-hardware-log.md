@@ -601,3 +601,103 @@ loader's DFU reconnect, before image upload. Neither normal USB, DFU nor loader
 USB enumerated afterward. A power cycle to the installed firmware was requested;
 clean-image RAM boot and final edit-buffer setup remain pending that recovery.
 This is not a measured looper failure and no permanent firmware write occurred.
+
+## Explicit Loop controller assignment
+
+2026-11-17. The user approved replacing the bypass-based transport mapping with
+normal Bypass Assign plus an explicit Momentary Loop Controller Assign. This
+section records offline implementation; the revised workflow has not run on the
+unit. See [the current control contract](microlooper-switch.md#explicit-loop-controller-assignment).
+
+**[verified offline: native conventions]** Native constructor, driver and Type
+knob replays establish parameter-controller fields and the shared Momentary
+setting. Actual controller writer/parser tests prove ordinary preset section 4
+persistence while preserving EXP assignments and unrelated sections. A Loop
+assignment uses slot 6/PID 15; hidden Play/Overdub use slots 7/8 with unchanged DSP
+PIDs 10/11. No assignment is created by adding an effect, no native switch type
+is changed automatically, and the ordinary bypass dispatcher is not patched.
+
+**[verified offline: gesture/lifetime checks]** Both models retain tap capture/
+listen and 400 ms held overdub. Tests cover unassigned and bypass-only blocks,
+proper/reversed/mismatched controller records, Momentary versus Latching,
+native bypass latch/RGB/writes, shared ordinary assignments, snapshots, held
+reassignment, native allocation reuse and lifecycle failures. Restored Loop
+values pass through native parameter delivery but create no physical gesture.
+Assignment snapshots use no nested graph/controller locks. A separately owned
+graph epoch rejects copies spanning native mutations; binding generation cannot
+spuriously cancel unrelated overdubbing. Independent review found that counter
+coupling, which was corrected and covered by a targeted regression.
+
+**[verified offline: final image]** The canonical
+`build/HX_Stomp_v3.80.0_HXtra.hxf` has MD5
+`c1df6a7a379af4f0c78c7349c8b918ac`. Native controller manifest v5 has SHA-256
+`f8a9b219c353b6c98182cf230f88ea740516eb420ca1bfd4cf519e4592f6a471`.
+The DSP initializer/control module grows from 37 to 41 instructions. The emitted
+audio core and planar bridge remain byte-for-byte identical, at identical
+addresses, to the preceding measured mono/stereo build. The 17%/20% charges and
+24,000/48,000-word histories are retained. Entry 2 leaves 200 bytes free. Full
+emitted-audio/allocation verification passes, with archive SHA-256
+`0dd5f21a9a43d255febb4db9f6aa7d93312e7a27d83566a56918448a72828287`.
+Ignored evidence is under `build/loop-controller/`, including build, verification,
+native trace and processing-byte comparison reports.
+
+The expanded parameter record has nine values (eight declared controls plus
+the native trailing boolean). Earlier experimental Atmosphere blocks must be
+deleted and re-added; no migration or implicit reassignment is installed.
+
+**[verified offline: regression]** Full suite: **2285 passed, 73 skipped in 440.55
+seconds (7 minutes 20 seconds)**. Expected skips remain the absent XL/Effects
+fixtures and separately selected upstream NAM suites. Additional native preset/
+shared-controller tests and restored-value/epoch regression checks also pass.
+Documentation links and whitespace checks pass. NAM source and runtime capacity
+are unchanged.
+
+**[hardware qualification outstanding]** Normal HX Stomp USB, DFU and temporary
+loader USB were all absent at the final inventory check. The earlier requested
+power-cycle/reconnection is still needed before loading this revision. No RAM
+upload, permanent flash, preset save, commit or push was performed for this
+control-assignment revision. Front-panel assignment and listening acceptance
+remain separate from the native-code tests above.
+
+**[verified on unit: clean RAM boot and unassigned preset]** After the requested
+power cycle, normal editor USB returned. The exact `c1df6a7a379af4f0c78c7349c8b918ac`
+image uploaded using `--writes ram`, booted, and answered normal editor status.
+The current preset 10 edit buffer was backed up first. A scratch Atmosphere Mono
+buffer reads back as model 381/kind 8 with nine values and empty native Bypass
+Assign and Controller Assign sections. No footswitch was assigned by the build
+or by opening this buffer. Evidence is in
+`build/ram-probes/explicit-loop-clean.json` and
+`build/loop-controller/loaded-unassigned.bin/.json`. The user is testing the
+front-panel Loop → Controller Assign → FS1 → Momentary workflow. No preset save
+or permanent firmware write was sent.
+
+**[verified on unit: native assignment and gesture]** The user assigned Loop
+through the front-panel Controller Assign workflow and confirmed that the
+captured phrase repeats. Native preset readback shows controller 4 (**FS2, middle
+switch**), parameter index 5, ordinary primary-model targeting, Off/On bool
+bounds, and the per-switch Momentary flag. The native footswitch label is Loop;
+there is no bypass assignment to Atmosphere in that readback. The block's nine
+values show Loop released, Play on and Overdub off. The user also added stock
+amp/cab and delay blocks; those edits were retained without modification.
+
+The user then confirmed held overdub adds a new note to the repeating capture
+and release stops overdubbing without the unwanted tap action. The current
+Atmosphere mode in readback is Stretch. Evidence is
+`build/loop-controller/assigned-loop.bin/.json`. A separate Latching bypass
+assignment is the next on-unit check.
+
+**[verified on unit: independent native bypass]** The user assigned Atmosphere
+Mono's bypass to **FS1 (left), Latching**, leaving Loop on **FS2 (middle),
+Momentary**. The user confirmed that bypass mutes the captured loop while live
+guitar remains audible, and enabling the block restores the loop. Final native
+readback independently shows FS1's bypass node and Latching flag, FS2's Loop
+parameter assignment and Momentary flag, enabled model 381, released Loop,
+Play on and Overdub off. The final readback is in Tape mode; the earlier capture
+readback was Stretch. The user's additional amp/cab and delay blocks remain in
+the edit buffer. Evidence is `build/loop-controller/verified-controls.bin/.json`.
+
+This is the working mono control checkpoint: explicit native assignment,
+capture/playback, held overdub/release and separate ordinary bypass have device
+acceptance. Stereo control/audio separation, Envelope mode, snapshot behavior
+and save/reload still need broader on-unit qualification. The exact clean image
+remains in RAM; no permanent firmware write or preset save was sent.

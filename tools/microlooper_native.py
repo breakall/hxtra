@@ -11,36 +11,36 @@ import struct
 from microlooper_definition import EFFECT, MODELS
 
 PRESET_ID = EFFECT.preset_id
+LOOP_SLOT = next(p.slot for p in EFFECT.parameters if p.name == 'Loop')
 PLAY_SLOT = next(p.slot for p in EFFECT.parameters if p.name == 'Play')
 OVERDUB_SLOT = next(p.slot for p in EFFECT.parameters if p.name == 'Overdub')
 STATE_BYTES = 32
 ROUTE_BYTES = 20  # state*, binding*, switch_index, stock_handler, lp_event_handler
-BYPASS_FILTER_SITE = 0x28dd11aa
-BYPASS_FILTER_STOCK = bytes.fromhex('9df8 2830')
+BYPASS_SITE = 0x28dd11aa
+BYPASS_STOCK = bytes.fromhex('9df8 2830')
 TICK_LITERAL, TICK_STOCK = 0x28dd2944, 0x28dd1015
 PARAMETER_FILTER_SITE = 0x28e04864
 PARAMETER_FILTER_STOCK = bytes.fromhex('2de9 f043')
 NATIVE_INTEGRATION_VERIFIED = False  # hardware qualification remains separate
 
 MODULE = 'src/m4/microlooper.s'
-MANIFEST_MAGIC = b'HXTRA_MLCTRLv4\0\0'
-MANIFEST_HEADER = struct.Struct('<16s13I32s')
-# Version4's position-independent bytes and public entry offsets. Source tests
+MANIFEST_MAGIC = b'HXTRA_MLCTRLv5\0\0'
+MANIFEST_HEADER = struct.Struct('<16s12I32s')
+# Version5's position-independent bytes and public entry offsets. Source tests
 # force an explicit manifest revision whenever the installed runtime changes.
-MODULE_SHA256 = '8e63de2a6020fb03e6917c21cac9cdfddfb2017543633e2edc25418f0571a249'
+MODULE_SHA256 = 'f8a9b219c353b6c98182cf230f88ea740516eb420ca1bfd4cf519e4592f6a471'
 LAYOUT = {
-    'microlooper_native_bypass_filter': 624,
-    'microlooper_native_parameter_filter': 664,
-    'microlooper_controller_key': 1792,
-    'microlooper_controller_tick': 1930,
-    'microlooper_controller_object_before': 1968,
-    'microlooper_controller_model_before': 2006,
-    'microlooper_controller_up_before': 2010,
-    'microlooper_controller_down_before': 2014,
-    'microlooper_controller_range_before': 2016,
-    'microlooper_controller_lower_bypass_before': 2078,
-    'microlooper_controller_bypass_before': 2106,
-    'microlooper_controller_after': 2168,
+    'microlooper_native_parameter_filter': 562,
+    'microlooper_controller_key': 1868,
+    'microlooper_controller_tick': 2000,
+    'microlooper_controller_object_before': 2032,
+    'microlooper_controller_model_before': 2074,
+    'microlooper_controller_up_before': 2078,
+    'microlooper_controller_down_before': 2082,
+    'microlooper_controller_range_before': 2084,
+    'microlooper_controller_lower_bypass_before': 2150,
+    'microlooper_controller_bypass_before': 2178,
+    'microlooper_controller_after': 2240,
 }
 HANDLER, HANDLER_STOCK = 0x28dd1978, bytes.fromhex('2de9 f043')
 # No stack-argument entry is chained. Native primitive creation/destruction and
@@ -57,7 +57,9 @@ LIFECYCLE = (
     (0x28e06b4c, '70b5 0b78', 'microlooper_controller_lower_bypass_before', 'UI/MIDI/snapshot bypass transition'),
 )
 CALLED = (
-    (0x28d96084, '0048 7047 4c8b 1228', 'native assignment manager getter'),
+    (0x28d96084, '0048 7047 4c8b 1228', 'native bypass manager getter'),
+    (0x28d9608c, '00 48 70 47 30 5d 12 28', 'native controller manager getter'),
+    (0x28dd83c4, '70b5 061d 0446 0d46', 'native shared Momentary getter'),
     (0x28e07844, '20b9 044b 1868 0830', 'native graph mutex lock'),
     (0x28e0785c, '20b9 044b 1868 0830', 'native graph mutex unlock'),
     (0x28e0fe94, 'f0b5 0646', 'native model lookup'),
@@ -77,7 +79,8 @@ def asm_include():
     r0 and argument registers survive; only r12 and condition flags change.
     Z is set exactly for an Atmosphere model. Inline hooks preserve their LR.
     """
-    lines = ['.thumb_func', 'microlooper_is_model:']
+    lines = [f'.equ ML_LOOP, {LOOP_SLOT}', f'.equ ML_PLAY, {PLAY_SLOT}',
+             f'.equ ML_OVERDUB, {OVERDUB_SLOT}', '.thumb_func', 'microlooper_is_model:']
     for effect in MODELS:
         lines += [f'    movw r12, #{effect.preset_id}', '    cmp r0, r12',
                   '    beq .Lml_model_match']
@@ -108,7 +111,7 @@ def install(p, *, shared_input_hook=None):
         p.expect(address, bytes.fromhex(stock), what)
     for address, stock, _, what in LIFECYCLE:
         p.expect(address, bytes.fromhex(stock), what)
-    p.expect(BYPASS_FILTER_SITE, BYPASS_FILTER_STOCK, 'selective Atmosphere switch bypass')
+    p.expect(BYPASS_SITE, BYPASS_STOCK, 'unchanged native effect bypass')
     p.expect(PARAMETER_FILTER_SITE, PARAMETER_FILTER_STOCK, 'Atmosphere transport snapshot filter')
     if shared_input_hook is None:
         hook = p.own_entry(HANDLER, HANDLER_STOCK, 'Atmosphere footswitch event routing')
@@ -130,8 +133,6 @@ def install(p, *, shared_input_hook=None):
                                        m['microlooper_controller_after'], kind))
         lifecycle.to(target)
         lifecycle_records.append((address, lifecycle.stock, target, m[before], kind))
-    p.put(BYPASS_FILTER_SITE, pm.thumb_bw(BYPASS_FILTER_SITE, m['microlooper_native_bypass_filter']),
-          'selective Atmosphere switch bypass')
     p.put(PARAMETER_FILTER_SITE, pm.thumb_bw(PARAMETER_FILTER_SITE, m['microlooper_native_parameter_filter']),
           'Atmosphere transport snapshot filter')
     p.chain_ptr(TICK_LITERAL, TICK_STOCK, after=m['microlooper_controller_tick'])
@@ -142,9 +143,9 @@ def install(p, *, shared_input_hook=None):
     input_veneer = p.add(veneer.bytes())
     hook.to(input_veneer)
     record_bytes = MANIFEST_HEADER.size + 20 * len(lifecycle_records)
-    manifest = MANIFEST_HEADER.pack(MANIFEST_MAGIC, 4, record_bytes, m.va, len(module_bytes),
+    manifest = MANIFEST_HEADER.pack(MANIFEST_MAGIC, 5, record_bytes, m.va, len(module_bytes),
         m['microlooper_controller_key'], m['microlooper_controller_tick'],
-        m['microlooper_native_parameter_filter'], m['microlooper_native_bypass_filter'],
+        m['microlooper_native_parameter_filter'],
         input_veneer, stock, lp_event, m['microlooper_controller_after'], len(lifecycle_records), digest)
     manifest += b''.join(struct.pack('<5I', *record) for record in lifecycle_records)
     manifest_va = p.add(manifest)
@@ -191,21 +192,23 @@ def verify_installed(e0):
     if len(positions) != 1:
         raise ValueError('Atmosphere controls require exactly one versioned runtime manifest')
     try:
-        (magic, version, size, base, code_size, key, tick, parameter, bypass, input_veneer,
+        (magic, version, size, base, code_size, key, tick, parameter, input_veneer,
          stock, lp_event, after, count, digest) = MANIFEST_HEADER.unpack_from(raw, positions[0])
-        if version != 4 or count != len(LIFECYCLE) or size != MANIFEST_HEADER.size + count * 20:
+        if version != 5 or count != len(LIFECYCLE) or size != MANIFEST_HEADER.size + count * 20:
             raise ValueError('unsupported Atmosphere controller manifest layout')
         if digest.hex() != MODULE_SHA256 or hashlib.sha256(p.read(base, code_size)).digest() != digest:
             raise ValueError('Atmosphere controller bytes do not match the verified runtime version')
         symbols = {name: base + offset for name, offset in LAYOUT.items()}
         expected = (symbols['microlooper_controller_key'], symbols['microlooper_controller_tick'],
-                    symbols['microlooper_native_parameter_filter'], symbols['microlooper_native_bypass_filter'],
+                    symbols['microlooper_native_parameter_filter'],
                     symbols['microlooper_controller_after'])
-        if (key, tick, parameter, bypass, after) != expected:
+        if (key, tick, parameter, after) != expected:
             raise ValueError('Atmosphere manifest entry addresses do not match its runtime version')
-        for site, target in ((HANDLER, input_veneer), (PARAMETER_FILTER_SITE, parameter), (BYPASS_FILTER_SITE, bypass)):
+        for site, target in ((HANDLER, input_veneer), (PARAMETER_FILTER_SITE, parameter)):
             if _branch(site, p.read(site, 4)) != target:
                 raise ValueError(f'Atmosphere controller hook is missing at {site:#x}')
+        if p.read(BYPASS_SITE, len(BYPASS_STOCK)) != BYPASS_STOCK:
+            raise ValueError('Atmosphere must preserve the native bypass dispatcher')
         a = pm.Asm(input_veneer)
         a.movw_movt(2, stock | 1); a.movw_movt(3, lp_event | 1 if lp_event else 0); a.bw(key)
         if p.read(input_veneer, len(a.bytes())) != a.bytes():

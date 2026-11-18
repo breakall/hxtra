@@ -78,7 +78,17 @@ Gate: complete algorithms pass differential tests and build fits without droppin
 
 ### Stage 4: switch and lifecycle integration
 
-Route the assigned switch to B without ordinary bypass toggling or competing 1-second long-press actions. Coordinate with the existing long-press handler. Preserve other blocks' footswitch behavior. Use idempotent transport state delivery, with initialization and snapshot handling that cannot turn restored Play/Overdub values into fresh actions. Validate tap/hold/release and rapid events, switch reassignment, model deletion, block moves, graph reconstruction and preset reload. Tests must use actual hooked M4 paths as well as isolated gesture tests. Multiple instantiated blocks must not alias memory; there is no bespoke instance-count enforcement or warning.
+Use explicit native Controller Assign for the visible Loop control, with a
+Momentary FS1–FS5 selection. Adding a block creates no assignment, and Bypass
+Assign retains its normal behavior. Route only the explicit Loop switch to the
+gesture decoder and coordinate its hold with the existing long-press handler.
+Preserve other blocks' footswitch behavior. Use idempotent transport state
+delivery, with initialization and snapshot handling that cannot turn restored
+parameter values into fresh actions. Validate tap/hold/release and rapid events,
+switch reassignment, model deletion, block moves, graph reconstruction and preset
+reload. Tests must use actual hooked M4 paths as well as isolated gesture tests.
+Multiple instantiated blocks must not alias memory; there is no bespoke instance
+count enforcement or warning.
 
 Gate: RAM hardware tests establish footswitch routing and capture continuity. Capture/Overdub controls must not silently depend on bypass DSP scheduling.
 

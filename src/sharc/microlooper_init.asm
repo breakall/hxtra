@@ -6,8 +6,8 @@
 // Only C-volatile R0/R1/I4/I12 and arithmetic flags are used. I6/I7 restored.
 // Private DM is163 words; no private PM, shared storage or SDRAM clear.
 // Clearing marker20 causes the audio core's bounded fresh-instance reset.
-// Transport10/11 start low; normal parameters5..9 arrive through model controls.
-// Before first processing (marker20=0), discard transport control delivery.
+// Transport10/11 and raw Loop15 start low; normal parameters5..9 arrive through controls.
+// Before first processing (marker20=0), discard transport and Loop delivery.
 // Native construction delivers its saved controls synchronously before return;
 // the new instance must not be published to audio midway through construction.
 // First processing therefore observes low transport and arms the first gesture.
@@ -25,6 +25,7 @@ microlooper_init_channels:
     R0 = 0;
     DM(10,I4) = R0;
     DM(11,I4) = R0;
+    DM(15,I4) = R0;
     DM(20,I4) = R0;
 microlooper_c_return:
     R0 = 0;
@@ -34,12 +35,16 @@ microlooper_c_return:
     NOP;
 
 MICROLOOPER_CONTROL:
+    R0 = 15;
+    COMPU(R4,R0);
+    IF EQ JUMP microlooper_control_valid;
     R0 = 5;
     COMPU(R4,R0);
     IF LT JUMP microlooper_c_return;
     R0 = 11;
     COMPU(R4,R0);
     IF GT JUMP microlooper_c_return;
+microlooper_control_valid:
     I4 = R12;
     R1 = DM(0,I4);
     R0 = 10;

@@ -28,7 +28,7 @@ def test_aliasing_parameter_identities_are_refused(field):
 
 def test_hidden_actions_cannot_become_visible_through_ui_order():
     params = list(EFFECT.parameters)
-    params[-1] = replace(params[-1], ui_index=5)
+    params[-1] = replace(params[-1], ui_index=6)
     with pytest.raises(ValueError, match='UI prefix'):
         replace(EFFECT, parameters=tuple(params))
 
@@ -63,7 +63,7 @@ def test_callback_registry_distinguishes_reset_from_teardown():
 def registered():
     # Deliberately separate state order from public/UI slot order. The native
     # state table and pmap must agree without silently changing public slots.
-    params = tuple(replace(p, state_index=6-p.state_index) for p in EFFECT.parameters)
+    params = tuple(replace(p, state_index=len(EFFECT.parameters)-1-p.state_index) for p in EFFECT.parameters)
     effect = replace(EFFECT, parameters=params)
     image, _ = native.register_model(stock(), effect, dsp_cost=1000,
                                      registry_address=0x200058, log=lambda _: None)
@@ -75,10 +75,10 @@ def test_persisted_order_is_independent_of_public_slots(registered):
     image, effect = registered
     item, cost = native.verify_model(image, effect)
     assert cost == 1000
-    assert [p['slot'] for p in item['params']] == [7, 6, 5, 4, 3, 2, 1]
+    assert [p['slot'] for p in item['params']] == [8, 7, 6, 5, 4, 3, 2, 1]
     params = effect.native_parameters()
-    assert params[0]['state'] == 'OverdubState' and params[0]['slot'] == 7
-    assert [p.restore for p in EFFECT.parameters[-2:]] == ['ignore', 'ignore']
+    assert params[0]['state'] == 'OverdubState' and params[0]['slot'] == 8
+    assert [p.restore for p in EFFECT.parameters[-3:]] == ['ignore', 'ignore', 'ignore']
 
 
 @pytest.mark.firmware

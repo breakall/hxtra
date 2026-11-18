@@ -232,7 +232,8 @@ def test_parameter_graph_must_still_deliver_play_to_the_declared_pid(candidate):
     e4 = kit.get_entry_swapped(data, 4)
     words = struct.unpack(f'<{len(e4)//4}I', e4)
     blob = list(kit.entry4_blob.blob(words, item['blob_index']))
-    pmap, count, play = blob[6], len(build.EFFECT.parameters), 5
+    pmap, count = blob[6], len(build.EFFECT.parameters)
+    play = next(p.state_index for p in build.EFFECT.parameters if p.name == 'Play')
     writer = pmap+blob[pmap]+10*(count+play)
     blob[pmap+blob[writer]+1] = 11
     changed, _, _ = kit.l6ia.rebuild_archive(data, {4: patch_comp.e4_replace_blob(e4, item['blob_index'], blob)})

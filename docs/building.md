@@ -81,12 +81,13 @@ reference/simulator coverage for model replacement and DMA recovery. See the
 ## Development Atmosphere build
 
 **Hardware status, 2026-11-17:** the clean mono/stereo build has MD5
-`ba4e9a12c9b6dab551be6326b2f70c94`. Atmosphere has separate native mono and stereo
+`c1df6a7a379af4f0c78c7349c8b918ac`. Atmosphere has separate native mono and stereo
 models. Mono is ID 381 (`HD2_AtmosphereMono`); stereo retains ID 380
-(`HD2_AtmosphereStereo`) so existing presets keep their identity. The timing
-prototype ran on the unit; the final clean RAM upload currently awaits a power
-cycle after a temporary loader reconnect failure. Its complete DSP boot entry
-is identical to the measured candidate. Internal
+(`HD2_AtmosphereStereo`) so existing presets keep their identity. The clean
+image boots from RAM and editor USB responds. An unassigned mono block reads back correctly; front-panel Loop assignment, capture, held overdub
+and release have been confirmed. Separate Latching bypass also mutes and
+restores the loop while preserving live guitar. The audio core and bridge are identical to the measured candidate;
+initialization/control adds the Loop input. Internal
 hot-code placement and exact compute changes previously reduced the stereo
 core's largest observed call from 69.8% to 14.0% of the audio-block interval.
 The user previously confirmed
@@ -152,7 +153,7 @@ The build writes `build/microlooper-build.json` with the native callbacks, runti
 manifest verification, resource counts and final HXF MD5. It rejects missing
 controls, wrong slot/PID/default or state mappings, changed native heap setup,
 overlap through external instruction/data aliases, and partition overflow. The
-complete NAM2 + compressor meter + metronome DSP image currently leaves **224 bytes** below the
+complete NAM2 + compressor meter + metronome DSP image currently leaves **200 bytes** below the
 512 KiB Entry 2 limit. Broader shared-load,
 audio cleanliness and native stereo acceptance still require hardware qualification.
 
@@ -171,14 +172,34 @@ skips callback/audio execution. Neither mode establishes hardware timing.
 
 On the device, both models are registered under **Delay > Atmosphere**, named
 **Atmosphere Mono** and **Atmosphere** (stereo), with Mode, Length, Modify, Clock
-and Mix. Assign one ordinary bypass footswitch:
-tap on release captures or resumes listening; hold for 400 ms overdubs during
-playback until release. A hold does not also tap. Captures are RAM-only and
+and Mix on the first pages, plus **Loop** as the sixth visible control. Adding
+the effect creates no footswitch assignment. To control the looper, use
+**Controller Assign** for **Loop**, choose FS1–FS5, set **Type = Momentary**,
+and leave its minimum/maximum at Off/On. Tap on release captures or resumes
+listening; hold for 400 ms overdubs during playback until release. A hold does
+not also tap. Loop value changes from knobs, MIDI or snapshots are not physical
+footswitch gestures; this integration routes explicit FS1–FS5 assignments only.
+
+**Bypass Assign** retains its ordinary function: the dry path continues while
+Atmosphere's loop is not heard. Bypass and Loop can use separate switches.
+Momentary/latching applies to the whole footswitch, including other assignments
+sharing it; the firmware never changes that setting automatically. The normal
+preset format stores the assignment. Snapshot restoration of a Loop value does
+not create a capture or overdub gesture.
+
+This revision adds a native parameter: earlier experimental Atmosphere blocks
+must be deleted and re-added. There are eight declared controls plus the native
+trailing boolean (nine preset values). No conversion of older experimental
+blocks is supplied. Play/Overdub remain hidden transport outputs.
+
+Captures are RAM-only and
 preset reload starts empty/listening. The controller retains playback across
 switch-mode changes when the DSP instance survives, while cancelling Overdub and
 disarming any held gesture. Tape tap capture and held overdub/release have been
-confirmed by listening; the remaining transport/lifecycle cases still require
-on-unit acceptance.
+confirmed through the new Controller Assign workflow on Atmosphere Mono, with
+a separate Latching bypass switch. Stereo, Envelope, snapshot and save/reload
+acceptance remain outstanding. Audio processing instructions are unchanged;
+only the initialization/control callback grows.
 
 See [integration evidence](research/features/microlooper-integration.md) for the
 native-code tests and exact remaining hardware checks. No firmware is installed

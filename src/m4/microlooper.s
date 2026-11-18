@@ -8,7 +8,7 @@
 @   +28 bound model ID (zero until initialized). State is per block/assignment, never a singleton.
 @ binding: immutable20 bytes {context, write_fn, block, generation, model_id}.
 @ write_fn(context, block, parameter_slot, bool_value) returns0 on success,
-@ nonzero on failure. Slots6/7 are Play/Overdub (not DSP PIDs10/11).
+@ nonzero on failure. Play/Overdub slots are declared separately from DSP PIDs10/11.
 @ Returns bit0 claimed for either Atmosphere model, bit2 if write failed; non-looper returns0
 @ without touching state. dirty desired values retry on subsequent polls;
 @ failed Play prevents an Overdub write from overtaking it.
@@ -21,15 +21,13 @@
 @ state for a matching binding; retryable failure leaves state intact. A stale
 @ binding is ignored. Call BEFORE losing valid native ownership of the block.
 @ microlooper_binding_reset(r0 state) clears local32 bytes WITHOUT touching DSP.
-@ Native caller still must install selective bypass, suppress longpress, poll while
+@ Native caller still must discover explicit Loop controller assignments, poll while
 @ down, pass a proven writer, keep listening block enabled and filter snapshot
 @ parameter restoration. This module does not prove any of those native seams.
 .syntax unified
 .thumb
 .include "microlooper_gesture.s"
 .include "microlooper_models.inc"
-.equ ML_PLAY, 6
-.equ ML_OVERDUB, 7
 
 .thumb_func
 microlooper_binding_reset:
@@ -230,15 +228,15 @@ microlooper_binding_cancel:
 @ 0x28dde60c and MIDI parameter caller0x28d9b2fc..0x28d9b436.
 @ This is suitable as binding.write_fn ONLY with a valid tone context and block
 @ identifier, after native assignment/lifecycle routing is established.
-@ (tone, block, UI slot6/7, bool) -> native status; rejects other slots.
+@ (tone, block, declared Play/Overdub slot, bool) -> native status.
 @ Stack descriptor: selector-2(primary model), zero-based parameter index,
 @ flag0 selects normal effect controls; flag1 selects native special fields.
 @ Packed value: type1(bool), value at+1.
 .thumb_func
 microlooper_native_write:
-    cmp r2, #6
+    cmp r2, #ML_PLAY
     beq .Lml_native_slot
-    cmp r2, #7
+    cmp r2, #ML_OVERDUB
     beq .Lml_native_slot
     mvn r0, #2
     bx lr
@@ -270,62 +268,6 @@ microlooper_native_write_return:
     add sp, #24
     pop {r4, pc}
 
-@ (tone, assignment_node, out_block) ->1 if node is a micro-looper,0 otherwise.
-@ Type1 bypass nodes keep block identifier at+0xc; next pointer is+0.
-@ Node kinds observed in stock0x28dd113e's table: type1 executes block lookup
-@ at0x28dd1190, type2 drives switch/controller state, type3 Command Center.
-@ Read-only lookup; unknown block/model leaves out_block unchanged.
-.thumb_func
-microlooper_native_node_match:
-    push {r4-r6, lr}
-    sub sp, #56
-    mov r5, r2
-    ldrb r2, [r1, #9]
-    cmp r2, #1
-    bne .Lml_native_no_match
-    ldr r4, [r1, #12]
-    mov r1, r4
-    movs r3, #0
-    str r3, [sp]
-    str r3, [sp, #4]               @ native invalid-ID path can return0 unwritten
-    mov r2, sp
-    ldr r3, =0x28e0fe95
-    blx r3
-    cmp r0, #0
-    blt .Lml_native_no_match
-    ldr r0, [sp, #1]
-    bl microlooper_is_model
-    bne .Lml_native_no_match
-    str r4, [r5]
-    movs r0, #1
-    b .Lml_native_match_out
-.Lml_native_no_match:
-    movs r0, #0
-.Lml_native_match_out:
-    add sp, #56
-    pop {r4-r6, pc}
-    .ltorg
-
-@ Inline hook at stock0x28dd11aa, AFTER successful kind1 model-info lookup.
-@ Stock bytes9df82830: ldrb.w r3,[sp,#40]. ID is unaligned word[sp+29].
-@ Skip only Atmosphere's node before its latch, colour or bypass is changed.
-@ Other nodes replay the displaced instruction and follow the original code.
-@ Requires the original dispatch frame; never call this as an ABI function.
-@ This isolated hook is tested against stock code. No feature installs it
-@ until the input, polling and lifecycle paths are wired together.
-.thumb_func
-microlooper_native_bypass_filter:
-    push {r0, r1, r12, lr}
-    ldr r0, [sp, #45]
-    bl microlooper_is_model
-    pop {r0, r1, r12, lr}
-    beq .Lml_native_skip_bypass
-    ldrb.w r3, [sp, #40]
-    ldr pc, =0x28dd11af
-.Lml_native_skip_bypass:
-    ldr pc, =0x28dd1187
-    .ltorg
-
 @ Entry hook at stock0x28e04864, guarded push.w {r4-r9,lr}.
 @ Restricts primary Atmosphere native transport writes to our writer's actual
 @ return address. No process-global allow flag or cross-thread window.
@@ -343,9 +285,9 @@ microlooper_native_parameter_filter:
     cmp lr, r4
     beq .Lml_parameter_pass
     ldr r4, [r2, #4]
-    cmp r4, #5
+    cmp r4, #(ML_PLAY - 1)
     beq .Lml_parameter_transport
-    cmp r4, #6
+    cmp r4, #(ML_OVERDUB - 1)
     bne .Lml_parameter_pass
 .Lml_parameter_transport:
     ldr r4, [r2]
@@ -374,11 +316,13 @@ microlooper_native_parameter_filter:
     ldr pc, =0x28e04869
     .ltorg
 
-@ (assignment_manager, fs0..4, out_block_ids, capacity_words) -> total kind1
-@ assignments. Copies at most capacity IDs; no native node pointer escapes.
-@ Native0x28dd71c4/0x28dd71e4 establish manager+4 mutex and sentinel layout.
-@ Holds only that mutex while traversing; never performs a DSP lookup/write
-@ inside it. Caller must still establish graph generation after this snapshot.
+@ (controller_manager, fs0..4, out_block_ids, capacity_words) -> eligible count.
+@ Only an explicit primary Loop parameter assignment with Off/On bool bounds
+@ on a Momentary Stomp switch participates. No bypass node is interpreted.
+@ Native constructor0x28dded64 owns64 nodes at+0xac, stride0x48. Allocated
+@ markers are0..63; kind0=parameter, controller3..7=FS1..5, selector-2=primary.
+@ Copy IDs under the controller mutex; no pointer or graph operation escapes.
+@ The shared Momentary flag is read BEFORE acquiring the controller mutex.
 .thumb_func
 microlooper_native_assignment_ids:
     cmp r1, #5
@@ -386,38 +330,77 @@ microlooper_native_assignment_ids:
     movs r0, #0
     bx lr
 .Lml_ids_valid:
-    push {r4-r8, lr}
+    push {r4-r10, lr}
     mov r4, r0
     mov r5, r2
     mov r6, r3
-    adds r1, #1
-    add.w r7, r4, r1, lsl #5
+    mov r9, r1
+    ldr r3, =0x28d96085
+    blx r3
+    mov r1, r9
+    ldr r3, =0x28dd83c5
+    blx r3
+    cmp r0, #0
+    beq .Lml_ids_none
+    adds r9, #3
     adds r0, r4, #4
     ldr r3, =0x28e24c01
     blx r3
-    ldr r2, [r7]
+    add.w r7, r4, #0xac
     movs r8, #0
+    movs r10, #64
 .Lml_ids_scan:
-    cmp r2, r7
-    beq .Lml_ids_done
-    ldrb r3, [r2, #9]
-    cmp r3, #1
+    ldrb r0, [r7, #0x44]
+    cmp r0, #64
+    bhs .Lml_ids_next
+    ldrb r0, [r7, #0x10]
+    cmp r0, r9
+    bne .Lml_ids_next
+    ldrb r0, [r7, #0x28]
+    cmp r0, #0
+    bne .Lml_ids_next
+    ldr r0, [r7, #0x30]
+    cmn r0, #2
+    bne .Lml_ids_next
+    ldr r0, [r7, #0x34]
+    cmp r0, #(ML_LOOP - 1)
+    bne .Lml_ids_next
+    ldrb r0, [r7, #0x38]
+    cmp r0, #0
+    bne .Lml_ids_next
+    ldr r0, [r7, #0x3c]
+    cmp r0, #0
+    bne .Lml_ids_next
+    ldrb r0, [r7, #0x18]
+    cmp r0, #1
+    bne .Lml_ids_next
+    ldrb r0, [r7, #0x20]
+    cmp r0, #1
+    bne .Lml_ids_next
+    ldr r0, [r7, #0x1c]
+    cmp r0, #0
+    bne .Lml_ids_next
+    ldr r0, [r7, #0x24]
+    cmp r0, #1
     bne .Lml_ids_next
     cmp r8, r6
     bhs .Lml_ids_count
-    ldr r3, [r2, #12]
-    str.w r3, [r5, r8, lsl #2]
+    ldr r0, [r7, #0x2c]
+    str.w r0, [r5, r8, lsl #2]
 .Lml_ids_count:
     add.w r8, r8, #1
 .Lml_ids_next:
-    ldr r2, [r2]
-    b .Lml_ids_scan
-.Lml_ids_done:
+    adds r7, #0x48
+    subs r10, #1
+    bne .Lml_ids_scan
     adds r0, r4, #4
     ldr r3, =0x28e24bb1
     blx r3
     mov r0, r8
-    pop {r4-r8, pc}
+    pop {r4-r10, pc}
+.Lml_ids_none:
+    movs r0, #0
+    pop {r4-r10, pc}
     .ltorg
 
 @ Explicit per-binding event composition, NOT an installed event hook.
@@ -426,8 +409,8 @@ microlooper_native_assignment_ids:
 @ Caller must select a live eligible Stomp assignment and initialize its binding
 @ before events. The binding's generation/lifetime is still caller-owned.
 @ Unrelated events go to lp_event(event,obj,stock_handler), preserving its ABI.
-@ Looper PRESS/RELEASE update transport and run stock directly: the selective
-@ bypass filter excludes only this block while other assigned blocks still act.
+@ Looper PRESS/RELEASE update transport and run stock directly. All native
+@ bypass and parameter assignments keep their normal independent behavior.
 @ Looper HOLD5 is consumed, so neither native nor custom1s alternate action runs.
 @ CLICK3 reaches stock directly and cannot replay a held-back long_press press.
 .thumb_func
@@ -524,8 +507,8 @@ microlooper_binding_tick:
 @ Record: state32, binding20, switchmask+52, nativeblockobject+56, seenmask+60,
 @ owned runtime link+64, twelve reserved bytes. Native init/destruction establish
 @ epochs; retained native moves can change grid IDs/object addresses.
-@ All controller access is serialized by the native graph mutex. Assignment
-@ IDs are copied under their own mutex in native graph-before-assignment order.
+@ Gesture state is serialized by the graph mutex. Assignment snapshots use
+@ only the separate controller mutex; refresh verifies ownership afterward.
 .equ ML_ROUTE_COUNT, 40
 .equ ML_ROUTE_SIZE, 80             @ +64 owned native runtime link; remaining12 reserved
 
@@ -551,31 +534,17 @@ microlooper_controller_unlock:
     bx lr
     .ltorg
 
-@ Input context is the UI listener, not the assignment manager. Resolve the
-@ manager through the same getter used by the native bypass dispatcher.
-@ Hold graph then assignment mutex through discovery and writes; the copied-ID
-@ accessor recursively takes the manager mutex. Lifecycle needs only graph.
+@ Controller and graph locks are never nested by this adapter: native code
+@ contains both orders. Refresh snapshots assignments outside the graph lock,
+@ then checks this ownership generation under the graph lock before binding.
+@ Lifecycle hooks increment it before mutation and retain the lock through after.
 .thumb_func
-microlooper_controller_input_lock:
-    push {r4, lr}
-    bl microlooper_controller_lock
-    ldr r3, =0x28d96085
-    blx r3
-    adds r0, #4
-    ldr r3, =0x28e24c01
-    blx r3
-    pop {r4, pc}
-.thumb_func
-microlooper_controller_input_unlock:
-    push {r4, lr}
-    ldr r3, =0x28d96085
-    blx r3
-    adds r0, #4
-    ldr r3, =0x28e24bb1
-    blx r3
-    bl microlooper_controller_unlock
-    pop {r4, pc}
-    .ltorg
+microlooper_controller_mutated:
+    adr.w r1, microlooper_controller_graph_epoch
+    ldr r0, [r1]
+    adds r0, #1
+    str r0, [r1]
+    bx lr
 
 @ Under graph lock, ordinary grid ID -> native block object or0. The slot
 @ record/node-table mapping is the same one native0x28e0904c and dsp_meter use.
@@ -638,13 +607,45 @@ microlooper_controller_pressed:
     mov r0, r1
     bx lr
 
-@ (stomp_obj) refresh eligible routes, retire disappeared bindings, initialize
-@ new bindings BEFORE a key's new pressed level is applied. Caller owns lock.
+@ (stomp_obj) snapshot explicit assignments and refresh eligible routes.
+@ Starts unlocked; returns with ONLY the graph lock held for the caller's drive.
+@ Stack-local configuration avoids sharing a snapshot between key/timer callers.
+@ Ownership generation brackets the controller-only copy: a graph mutation
+@ suspends old gestures until release instead of binding a stale grid ID.
 .thumb_func
 microlooper_controller_refresh:
     push {r4-r11, lr}
-    sub sp, #100                  @ info56, IDs32, setting8, padding4
+    sub sp, #284                  @ info100, five(count+IDs32), ownership epoch
     mov r4, r0
+    bl microlooper_controller_lock
+    adr.w r1, microlooper_controller_graph_epoch
+    ldr r0, [r1]
+    str r0, [sp, #280]
+    bl microlooper_controller_unlock
+    movs r6, #0
+    add r7, sp, #100
+.Lml_snapshot_switch:
+    ldr r3, =0x28d9608d
+    blx r3
+    mov r1, r6
+    adds r2, r7, #4
+    movs r3, #8
+    bl microlooper_native_assignment_ids
+    cmp r0, #8
+    it hi
+    movhi r0, #8                  @ at most eight blocks in a native preset
+    str r0, [r7]
+    adds r7, #36
+    adds r6, #1
+    cmp r6, #5
+    bne .Lml_snapshot_switch
+    bl microlooper_controller_lock
+    adr.w r1, microlooper_controller_graph_epoch
+    ldr r0, [r1]
+    ldr r1, [sp, #280]
+    cmp r0, r1
+    bne .Lml_refresh_stale
+    mov r0, r4
     bl microlooper_controller_pressed
     mov r11, r0
     adr.w r5, microlooper_controller_routes
@@ -671,16 +672,18 @@ microlooper_controller_refresh:
     ldrb.w r0, [r0, r6, lsl #1]
     cmp r0, #2
     bne .Lml_refresh_next_switch
-    ldr r3, =0x28d96085
-    blx r3
-    mov r1, r6
-    add r2, sp, #56
-    movs r3, #8
-    bl microlooper_native_assignment_ids
-    cmp r0, #8
-    it hi
-    movhi r0, #8                 @ native per-switch fixed slot capacity
-    mov r7, r0
+    movs r0, #36
+    add r1, sp, #100
+    mla r1, r6, r0, r1
+    ldr r7, [r1]
+    adds r1, #4
+    add r0, sp, #56
+    movs r2, #8
+.Lml_snapshot_copy:
+    ldr r3, [r1], #4
+    str r3, [r0], #4
+    subs r2, #1
+    bne .Lml_snapshot_copy
     movs r8, #0
 .Lml_refresh_id:
     cmp r8, r7
@@ -855,7 +858,22 @@ microlooper_controller_refresh:
     adds r5, #ML_ROUTE_SIZE
     subs r6, #1
     bne .Lml_refresh_record
-    add sp, #100
+    b .Lml_refresh_return
+.Lml_refresh_stale:
+    adr.w r5, microlooper_controller_routes
+    movs r6, #ML_ROUTE_COUNT
+.Lml_refresh_suspend:
+    ldr r0, [r5, #56]
+    cbz r0, .Lml_refresh_suspend_next
+    mov r0, r5
+    add r1, r5, #32
+    bl microlooper_binding_suspend
+.Lml_refresh_suspend_next:
+    adds r5, #ML_ROUTE_SIZE
+    subs r6, #1
+    bne .Lml_refresh_suspend
+.Lml_refresh_return:
+    add sp, #284
     pop {r4-r11, pc}
     .ltorg
 
@@ -906,8 +924,6 @@ microlooper_controller_key:
     cmp r8, #5
     bhs .Lml_key_pass
     mov r0, r5
-    bl microlooper_controller_input_lock
-    mov r0, r5
     bl microlooper_controller_refresh
     mov r0, r5
     bl microlooper_controller_pressed
@@ -925,7 +941,7 @@ microlooper_controller_key:
     bl microlooper_controller_drive
     and.w r8, r0, r9
     mov r0, r5
-    bl microlooper_controller_input_unlock
+    bl microlooper_controller_unlock
     cmp r8, #0
     beq .Lml_key_pass
     cmp r10, #5
@@ -952,8 +968,6 @@ microlooper_controller_tick:
     push {r4, lr}
     mov r4, r1
     mov r0, r4
-    bl microlooper_controller_input_lock
-    mov r0, r4
     bl microlooper_controller_refresh
     mov r0, r4
     bl microlooper_controller_pressed
@@ -961,7 +975,7 @@ microlooper_controller_tick:
     mov r0, r4
     bl microlooper_controller_drive
     mov r0, r4
-    bl microlooper_controller_input_unlock
+    bl microlooper_controller_unlock
     pop {r4, pc}
 
 @ Primitive hooks enter with native(manager,blockobject,...). Keep the graph
@@ -972,6 +986,7 @@ microlooper_controller_object_before:
     push {r4-r6, lr}
     mov r6, r1
     bl microlooper_controller_lock
+    bl microlooper_controller_mutated
     adr.w r4, microlooper_controller_routes
     movs r5, #ML_ROUTE_COUNT
 .Lml_object_retire:
@@ -1014,6 +1029,7 @@ microlooper_controller_range_before:
     mov r7, r0
 .Lml_range_ordered:
     bl microlooper_controller_lock
+    bl microlooper_controller_mutated
     adr.w r4, microlooper_controller_routes
     movs r5, #ML_ROUTE_COUNT
 .Lml_range_next:
@@ -1176,6 +1192,8 @@ microlooper_controller_write:
     .ltorg
 
 .balign 4
+microlooper_controller_graph_epoch:
+    .word 0
 microlooper_controller_generation:
     .word 0
 microlooper_controller_routes:

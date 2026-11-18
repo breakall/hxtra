@@ -354,14 +354,14 @@ def verify_callbacks(e2, decoded, report, effect=EFFECT):
         finally:
             sim.wr = original_write
     invoke(report['init_entry'], [(4, descriptor)])
-    require([sim.rd(state+i) for i in (10, 11, 20)] == [0, 0, 0], 'native init did not reset transport')
+    require([sim.rd(state+i) for i in (10, 11, 15, 20)] == [0, 0, 0, 0], 'native init did not reset transport')
     require(sim.rd(state+14) == effect.width, 'native init channel count differs from model width')
     require(sim.rd(state+9) == 0x7fc00000 and sim.rd(0x400000) == 0xdeadbeef,
             'native init touched unrelated controls/history')
     for live in (False, True):
         sim.wr(state+20, int(live))
         sim.wr(value, 1)
-        for pid in (10, 11):
+        for pid in (10, 11, 15):
             invoke(report['control_entry'], [(4, pid), (8, value), (12, descriptor)])
             require(sim.rd(state+pid) == int(live), 'native transport control initialization guard differs')
     carved = allocation.inspect_member_arenas(e2, dm_words=effect.instance.dm_words,

@@ -11,6 +11,7 @@ from firmware import reader, stock_e0, stock_entry
 
 CODE, OBJ, DSP, TABLE = 0x28e60000, 0x28128a80, 0x28500000, 0x28510000
 MANAGER = 0x28128b4c  # native getter 0x28d96084; distinct from the UI listener context
+CONTROLLERS = 0x28125d30  # native parameter Controller Assign manager, getter0x28d9608c
 EVENT, STOCK, LP, THREAD = 0x28f50000, 0x28f90000, 0x28f90010, 0x28f70000
 
 
@@ -30,13 +31,19 @@ class Controller:
         self.now, self.mode, self.depth, self.assignment_depth = 0, 0, 0, 0
         self.assignments, self.models, self.bypass, self.writes = {}, {}, {}, []
         self.stock_events, self.lp_events, self.fail = [], [], False
+        self.lock_order = []
+        self.on_assignment_unlock = None
         m = self.m
         m.u32(0x28449e78, DSP)
         m.u32(DSP + 0x4400, TABLE)
         for fs in range(5):
             m.u8(0x28128a74 + 2 * fs, 2)
             m.u32(MANAGER + (fs + 1) * 32, MANAGER + (fs + 1) * 32)
+        for index in range(64):
+            m.u8(CONTROLLERS+0xac+0x48*index+0x44, 0x40)
         m.stub(0x28d96084, lambda m: m.reg('r0', MANAGER))
+        m.stub(0x28d9608c, lambda m: m.reg('r0', CONTROLLERS))
+        m.stub(0x28dd83c4, self.get_momentary)
         m.stub(0x28e07844, self.lock)
         m.stub(0x28e0785c, self.unlock)
         m.stub(0x28e24c00, lambda m: self.assignment_lock(m, 1))
@@ -53,20 +60,30 @@ class Controller:
         return self.base + self.sym[symbol]
 
     def lock(self, m):
-        assert m.reg('r0') == 0
+        assert m.reg('r0') == 0 and self.assignment_depth == 0
         self.depth += 1
+        self.lock_order.append(('graph', 1, self.assignment_depth))
         m.reg('r0', 0)
 
     def unlock(self, m):
         assert m.reg('r0') == 0 and self.depth > 0
         self.depth -= 1
+        self.lock_order.append(('graph', -1, self.assignment_depth))
         m.reg('r0', 0)
 
     def assignment_lock(self, m, change):
-        assert m.reg('r0') == MANAGER + 4 and self.depth
+        assert m.reg('r0') == CONTROLLERS + 4 and self.depth == 0
         self.assignment_depth += change
         assert self.assignment_depth >= 0
+        self.lock_order.append(('controller', change, self.depth))
+        if change == -1 and self.on_assignment_unlock is not None:
+            callback, self.on_assignment_unlock = self.on_assignment_unlock, None
+            callback()
         m.reg('r0', 0)
+
+    def get_momentary(self, m):
+        assert m.reg('r0') == MANAGER and m.reg('r1') < 5 and self.depth == self.assignment_depth == 0
+        m.reg('r0', m.read(MANAGER+0x28+32*m.reg('r1'), 1)[0])
 
     def setting(self, m):
         if m.reg('r0') == 21:
@@ -119,7 +136,8 @@ class Controller:
         self.m.u32(obj + 0x9f0, 0x28700000 + slot * 0x100)
         return obj
 
-    def assign(self, fs, blocks):
+    def assign_bypass(self, fs, blocks):
+        """Stock kind1 Bypass Assign nodes, independent of Loop routing."""
         sentinel = MANAGER + (fs + 1) * 32
         nodes = [0x28f10000 + fs * 0x1000 + n * 0x38 for n in range(len(blocks))]
         self.m.u32(sentinel, nodes[0] if nodes else sentinel)
@@ -127,6 +145,39 @@ class Controller:
             self.m.u32(nodes[n], nodes[n + 1] if n + 1 < len(nodes) else sentinel)
             self.m.u8(nodes[n] + 9, 1)
             self.m.u32(nodes[n] + 12, block)
+
+    def assign(self, fs, blocks, *, momentary=True):
+        """Explicit Loop Controller Assign plus requested per-FS test setup.
+
+        Native constructor0x28dded64 uses64 0x48-byte nodes; primary ordinary
+        parameter descriptors are{-2,index5,flag0,secondary0}, controllerFS+3.
+        Momentary is the shared native per-switch setting, not a per-node bit.
+        """
+        self.assignments[fs] = list(blocks)
+        self.m.u8(MANAGER+0x28+32*fs, int(momentary))
+        for index in range(64):
+            node = CONTROLLERS+0xac+0x48*index
+            self.m.write(node, bytes(0x48))
+            self.m.u8(node+0x44, 0x40)
+        index = 0
+        for switch, ids in self.assignments.items():
+            for block in ids:
+                assert index < 64
+                node = CONTROLLERS+0xac+0x48*index
+                self.m.u8(node+0x10, switch+3)
+                self.m.u8(node+0x18, 1)
+                self.m.u32(node+0x1c, 0)
+                self.m.u8(node+0x20, 1)
+                self.m.u32(node+0x24, 1)
+                self.m.u8(node+0x28, 0)
+                self.m.u32(node+0x2c, block)
+                self.m.u32(node+0x30, 0xfffffffe)
+                self.m.u32(node+0x34, 5)
+                self.m.u8(node+0x38, 0)
+                self.m.u32(node+0x3c, 0)
+                self.m.u8(node+0x44, index)
+                self.m.u8(node+0x45, 1)
+                index += 1
 
     def key(self, kind, fs=0, lp=True):
         self.m.write(EVENT, struct.pack('<4BI', 1, fs + 12, 0, 0, kind))
@@ -148,24 +199,96 @@ def controller(m4emu, request):
     return Controller(m4emu, model=request.param)
 
 
+@pytest.mark.parametrize('bypass_only', [False, True])
+def test_unassigned_or_bypass_only_block_has_no_automatic_loop_route(controller, bypass_only):
+    c = controller; c.add()
+    if bypass_only:
+        c.assign_bypass(0, [1])
+    before = c.m.read(MANAGER+0x28, 1)
+    c.key(1, lp=False); c.key(2, lp=False); c.tick()
+    assert c.writes == [] and c.routes() == []
+    assert c.stock_events == [(12, 1), (12, 2)]
+    assert c.m.read(MANAGER+0x28, 1) == before
+
+
+def test_loop_requires_explicit_momentary_without_changing_the_shared_setting(controller):
+    c = controller; c.add(); c.assign(0, [1], momentary=False)
+    c.tick(); c.key(1); c.now = 400000; c.tick(); c.key(2)
+    assert c.writes == [] and c.routes() == []
+    assert c.m.read(MANAGER+0x28, 1) == b'\0'
+
+
+def test_graph_mutation_between_assignment_copy_and_drive_cannot_create_a_gesture(controller):
+    c = controller; c.add(); c.assign(0, [1]); c.tick()
+    c.key(1); c.key(2); c.key(1); c.now = 400000; c.writes.clear()
+    generation = c.at('microlooper_controller_graph_epoch')
+    def mutation():
+        assert c.depth == c.assignment_depth == 0
+        c.m.u32(generation, c.m.u32(generation)+1)
+    c.on_assignment_unlock = mutation
+    c.tick()
+    assert all(slot == 8 and value == 0 for _, slot, value in c.writes)
+    assert struct.unpack_from('<I', c.routes()[0], 16)[0] == 1
+    c.writes.clear(); c.key(2)
+    assert c.writes == [], 'an old held release cannot capture after a graph epoch race'
+
+
+def test_unrelated_binding_generation_change_does_not_interrupt_overdub(controller):
+    c = controller; c.add(); c.assign(0, [1]); c.tick()
+    c.key(1); c.key(2); c.key(1); c.now = 400000; c.tick(); c.writes.clear()
+    generation = c.at('microlooper_controller_generation')
+    c.on_assignment_unlock = lambda: c.m.u32(generation, c.m.u32(generation)+1)
+    c.tick()
+    assert c.writes == []
+    assert struct.unpack_from('<I', c.routes()[0], 20)[0] == 1
+    c.key(2)
+    assert c.writes == [(1, 8, 0)]
+
+
+@pytest.mark.parametrize('level', [False, True])
+def test_restored_loop_parameter_level_cannot_synthesize_a_physical_tap(controller, level):
+    c = controller; c.add(); c.assign(0, [1]); c.tick(); c.writes.clear()
+    stock = reader(stock_e0())
+    # Enter the real parameter filter directly; its pass path executes the
+    # original native setter body, without replacing the owned-writer stub.
+    c.m.load(native.PARAMETER_FILTER_SITE+4, stock(native.PARAMETER_FILTER_SITE+4, 0x11c))
+    c.m.stub(0x28e07714, lambda m: m.reg('r0', 0))
+    levels = []
+    def lower(m):
+        descriptor, value = m.reg('r2'), m.reg('r3')
+        assert struct.unpack('<2I', m.read(descriptor, 8)) == (0xfffffffe, 5)
+        levels.append(m.read(value, 2))
+        m.reg('r0', 0)
+    c.m.stub(0x28e02040, lower)
+    descriptor, value = 0x28f51000, 0x28f51020
+    c.m.write(descriptor, struct.pack('<3I', 0xfffffffe, 5, 0))
+    c.m.write(value, bytes([1, int(level), 0, 0, 0]))
+    assert c.m.call(c.at('microlooper_native_parameter_filter'), 0, 1, descriptor, value) == 0
+    c.tick()
+    assert levels == [bytes([1, int(level)])] and c.writes == []
+    assert struct.unpack_from('<I', c.routes()[0], 16)[0] == 0
+    c.key(1); c.key(2)
+    assert c.writes == [(1, 7, 1)]
+
+
 def test_discovers_deduplicates_and_tap_hold_routes_all_micro_instances(controller):
     c = controller
     for block in (1, 2, 11):
         c.add(block)
     c.assign(0, [1, 1, 2]); c.assign(1, [11])
     c.key(1)
-    assert c.writes == [(1, 6, 0), (1, 7, 0), (2, 6, 0), (2, 7, 0), (11, 6, 0), (11, 7, 0)]
+    assert c.writes == [(1, 7, 0), (1, 8, 0), (2, 7, 0), (2, 8, 0), (11, 7, 0), (11, 8, 0)]
     assert len(c.routes()) == 3 and not c.lp_events
     c.writes.clear(); c.now = 100; c.key(2)
-    assert c.writes == [(1, 6, 1), (2, 6, 1)]
+    assert c.writes == [(1, 7, 1), (2, 7, 1)]
     c.now = 200; c.key(1); c.now = 400200; c.tick()
-    assert c.writes[-2:] == [(1, 7, 1), (2, 7, 1)]
+    assert c.writes[-2:] == [(1, 8, 1), (2, 8, 1)]
     c.key(5)
     assert (12, 5) not in c.stock_events and not c.lp_events
     c.now += 1; c.key(2)
-    assert c.writes[-2:] == [(1, 7, 0), (2, 7, 0)]
+    assert c.writes[-2:] == [(1, 8, 0), (2, 8, 0)]
     c.key(1, 1); c.key(2, 1)
-    assert c.writes[-1] == (11, 6, 1)
+    assert c.writes[-1] == (11, 7, 1)
 
 
 def test_one_block_shared_by_two_switches_has_one_transport(controller):
@@ -174,7 +297,7 @@ def test_one_block_shared_by_two_switches_has_one_transport(controller):
     c.key(1, 0); c.key(1, 1); c.key(2, 0)
     assert c.writes == []
     c.key(2, 1)
-    assert c.writes == [(1, 6, 1)] and len(c.routes()) == 1
+    assert c.writes == [(1, 7, 1)] and len(c.routes()) == 1
 
 
 @pytest.mark.parametrize('reason', ['mode', 'function', 'bypass', 'unassign'])
@@ -187,7 +310,7 @@ def test_eligibility_change_cancels_and_disarms_until_release(controller, reason
     elif reason == 'bypass': c.bypass[1] = 1
     else: c.assign(0, [])
     c.tick()
-    assert c.writes == [(1, 7, 0)] and len(c.routes()) == 1
+    assert c.writes == [(1, 8, 0)] and len(c.routes()) == 1
     c.mode = 0; c.m.u8(0x28128a74, 2); c.bypass[1] = 0; c.assign(0, [1])
     c.now += 1; c.tick(); c.writes.clear(); c.key(2)
     assert c.writes == [], 'release of the old held input cannot capture after rebind'
@@ -206,7 +329,7 @@ def test_object_invalidation_is_before_reuse_and_does_not_stop_unrelated_block(c
     c = controller; obj = c.add(); c.add(2); c.assign(0, [1]); c.assign(1, [2]); c.tick()
     c.key(1); c.key(2); c.key(1); c.now = 400000; c.tick(); c.writes.clear()
     c.m.call(c.at('microlooper_controller_object_before'), DSP + 0x43fc, obj)
-    assert c.depth == 1 and c.writes == [(1, 7, 0)]
+    assert c.depth == 1 and c.writes == [(1, 8, 0)]
     c.m.call(c.at('microlooper_controller_unlock'))
     assert len(c.routes()) == 2
     # A successful initializer is an independent allocation epoch, even if the
@@ -215,7 +338,7 @@ def test_object_invalidation_is_before_reuse_and_does_not_stop_unrelated_block(c
     c.m.call(c.at('microlooper_controller_after'), 0, obj, 1)
     assert len(c.routes()) == 1
     c.tick()
-    assert c.writes[-2:] == [(1, 6, 0), (1, 7, 0)]
+    assert c.writes[-2:] == [(1, 7, 0), (1, 8, 0)]
     c.writes.clear(); c.key(2)
     assert c.writes == []
 
@@ -230,7 +353,7 @@ def test_assignment_change_while_released_accepts_the_next_fresh_press(controlle
     c = controller; c.add(); c.assign(0, [1]); c.tick(); c.key(1); c.key(2)
     c.assign(0, []); c.assign(1, [1]); c.writes.clear()
     c.key(1, 1); c.key(2, 1)
-    assert c.writes == [(1, 6, 0)], 'new assigned switch should respond on its first fresh tap'
+    assert c.writes == [(1, 7, 0)], 'new assigned switch should respond on its first fresh tap'
 
 
 def test_install_uses_guarded_native_entries(m4emu):
@@ -274,12 +397,12 @@ def test_real_native_mutation_failure_preserves_live_playback_with_off_retries(m
     descriptor = 0x28f5f000
     c.m.write(descriptor, bytes(16))  # invalid constructor kind; destructor has no owner
     assert c.m.call(entry, DSP + 0x43fc, obj, descriptor) == error & 0xffffffff
-    assert c.depth == 0 and c.writes == [(1, 7, 0)]
+    assert c.depth == 0 and c.writes == [(1, 8, 0)]
     c.tick()
-    assert c.writes[-1] == (1, 7, 0)
+    assert c.writes[-1] == (1, 8, 0)
     assert len(c.routes()) == 1
     c.fail = False; c.tick()
-    assert all(slot == 7 and value == 0 for _, slot, value in c.writes)
+    assert all(slot == 8 and value == 0 for _, slot, value in c.writes)
     c.writes.clear(); c.key(2)
     assert c.writes == []
 
@@ -288,9 +411,9 @@ def test_failed_eligibility_cancel_retries_without_old_hold_or_capture(controlle
     c = controller; c.add(); c.assign(0, [1]); c.tick()
     c.key(1); c.key(2); c.key(1); c.now = 400000; c.tick()
     c.fail = True; c.mode = 2; c.writes.clear(); c.tick(); c.tick()
-    assert c.writes and all(write == (1, 7, 0) for write in c.writes)
+    assert c.writes and all(write == (1, 8, 0) for write in c.writes)
     c.mode = 0; c.tick()
-    assert c.writes[-1] == (1, 7, 0)
+    assert c.writes[-1] == (1, 8, 0)
     c.fail = False; c.tick(); c.writes.clear(); c.key(2)
     assert c.writes == []
 
@@ -322,7 +445,7 @@ def test_actual_native_bool_setter_recurses_graph_lock_then_restores_outer_owner
     m.stub(0x28e08454, lower)
     assert m.call(0x28e07844, 0) == 0
     assert m.u32(DSP + 12) == 1
-    assert m.call(CODE + symbols['microlooper_native_write'], 0, 1, 6, 0) == (-19 & 0xffffffff)
+    assert m.call(CODE + symbols['microlooper_native_write'], 0, 1, 7, 0) == (-19 & 0xffffffff)
     assert m.u32(DSP + 8) == THREAD and m.u32(DSP + 12) == 1
     assert m.call(0x28e0785c, 0) == 0
     assert m.u32(DSP + 8) == m.u32(DSP + 12) == 0
@@ -343,7 +466,7 @@ def test_actual_native_destructor_invalidates_before_pointer_reuse(m4emu, status
     c.m.stub(0x28dfa774, lambda m: m.reg('r0', 0))
     c.m.stub(0x28dfcba8, lambda m: m.reg('r0', 0))
     def unhook(m):
-        assert c.writes == [(1, 7, 0)], 'OverdubOff precedes native ownership destruction'
+        assert c.writes == [(1, 8, 0)], 'OverdubOff precedes native ownership destruction'
         assert c.m.u32(obj + 0x9f0) == owner
         m.reg('r0', status)
     c.m.stub(0x28df35e8, unhook)
@@ -354,7 +477,7 @@ def test_actual_native_destructor_invalidates_before_pointer_reuse(m4emu, status
     c.add()                      # same native object and runtime-link addresses reused
     c.tick()
     assert struct.unpack_from('<I', c.routes()[0], 12)[0] != generation
-    assert c.writes[-2:] == [(1, 6, 0), (1, 7, 0)]
+    assert c.writes[-2:] == [(1, 7, 0), (1, 8, 0)]
     c.writes.clear(); c.key(2)
     assert c.writes == []
 
@@ -380,7 +503,7 @@ def test_actual_native_move_retargets_owned_transport_without_stopping_playback(
     c.m.stub(0x28e07328, resolve)
     c.m.stub(0x28e24c78, lambda m: m.write(m.reg('r0'), m.read(m.reg('r1'), m.reg('r2'))))
     def move(m):
-        assert c.writes == [(1, 7, 0)] and c.depth == 2
+        assert c.writes == [(1, 8, 0)] and c.depth == 2
         c.m.u32(DSP + 0x14, 0xffffffff)
         c.m.u32(DSP + 0x14 + 0x54, 0)
         c.models[2] = c.models.pop(1); c.assign(0, [2])
@@ -393,7 +516,7 @@ def test_actual_native_move_retargets_owned_transport_without_stopping_playback(
     assert struct.unpack_from('<I', route, 12)[0] == generation
     assert struct.unpack_from('<I', route, 16)[0] == 1
     c.tick(); c.key(2)
-    assert c.writes == [(1, 7, 0)], 'retained native allocation preserves Play and disarms old release'
+    assert c.writes == [(1, 8, 0)], 'retained native allocation preserves Play and disarms old release'
 
 
 def test_manifest_version_matches_assembled_source(m4emu):
@@ -423,7 +546,7 @@ def test_manifest_requires_real_hook_relationships_not_marker(target):
     report = native.install(p); p.finish_chains()
     e0 = bytearray(p.entry0())
     addresses = dict(input=native.HANDLER, parameter=native.PARAMETER_FILTER_SITE,
-                     bypass=native.BYPASS_FILTER_SITE, tick=native.TICK_LITERAL,
+                     bypass=native.BYPASS_SITE, tick=native.TICK_LITERAL,
                      runtime=report['microlooper_controller_key'], lifecycle=native.LIFECYCLE[0][0],
                      manifest=report['manifest_va'] + 20)
     offset = p.off(addresses[target], 1) if addresses[target] < p.cave.va else None
@@ -461,7 +584,7 @@ def test_actual_lower_bypass_for_ui_midi_and_snapshot_preserves_play(controller,
     def bypass(m):
         assert c.depth == 1
         if changed:
-            assert c.writes == [(1, 7, 0)], 'stop overdub before native bypass'
+            assert c.writes == [(1, 8, 0)], 'stop overdub before native bypass'
         else:
             assert not c.writes, 'unchanged snapshot bypass must leave transport untouched'
         c.bypass[1] = int(not m.reg('r2'))
@@ -475,7 +598,7 @@ def test_actual_lower_bypass_for_ui_midi_and_snapshot_preserves_play(controller,
         assert c.routes()[0] == before
     else:
         c.tick(); c.bypass[1] = 0; c.tick(); c.key(2)
-        assert c.writes == [(1, 7, 0)]
+        assert c.writes == [(1, 8, 0)]
 
 
 def test_installed_controller_composes_real_lp_event_for_other_switch(m4emu):
@@ -485,7 +608,6 @@ def test_installed_controller_composes_real_lp_event_for_other_switch(m4emu):
     lp_code, lp_symbols = m4emu.assemble('src/m4/long_press.s', features.load(), setting_ids.by_name())
     lp_base = 0x28e80000; c.m.load(lp_base, lp_code)
     c.m.stub(0x28d96084, lambda m: m.reg('r0', MANAGER))
-    c.m.stub(0x28dd83c4, lambda m: m.reg('r0', 0))
     c.m.stub(0x28d96134, lambda m: m.reg('r0', 0))
     c.m.stub(0x28d96588)
     def key(fs, kind):
@@ -506,13 +628,13 @@ def test_retained_link_changed_primary_model_cannot_receive_transport_slot_write
     c.key(1); c.now = 400000; c.tick(); c.writes.clear()
     c.models[1] = 555             # same object and runtime link, different primary identity
     c.m.call(c.at('microlooper_controller_lock'))
-    assert c.m.call(c.at('microlooper_controller_write'), 0, 1, 7, 0) == (-3 & 0xffffffff)
+    assert c.m.call(c.at('microlooper_controller_write'), 0, 1, 8, 0) == (-3 & 0xffffffff)
     c.m.call(c.at('microlooper_controller_unlock'))
     c.tick()
     assert not c.writes and not c.routes()
 
 
-def test_assignment_mutex_is_held_through_control_writes_and_released_on_failure(controller):
+def test_controller_assignment_mutex_is_released_before_graph_writes_even_on_failure(controller):
     c = controller; c.add(); c.assign(0, [1]); c.tick(); c.key(1)
     c.fail = True
     seen = []
@@ -521,7 +643,7 @@ def test_assignment_mutex_is_held_through_control_writes_and_released_on_failure
         lambda uc, address, size, user: seen.append((c.depth, c.assignment_depth)),
         begin=address, end=address)
     c.key(2)
-    assert seen == [(1, 1)]
+    assert seen == [(1, 0)]
     assert c.depth == c.assignment_depth == 0
 
 
@@ -573,7 +695,7 @@ def test_actual_identical_reload_dispatches_native_ordinary_deletion_before_rebu
     c.m.stub(0x28dfa864, object_lookup)
     destroyed, rebuilt = [], []
     def dsp_stop(m):
-        assert c.writes == [(1, 7, 0)]
+        assert c.writes == [(1, 8, 0)]
         destroyed.append(True); m.reg('r0', 0)
     c.m.stub(0x28df35e8, dsp_stop)
     def select(m):
@@ -629,21 +751,21 @@ def test_actual_native_bypass_getter_inverts_enabled_flag(m4emu, enabled_bit, ex
     assert m.read(out, 1) == bytes([expected_bypass])
 
 
-def test_input_resolves_assignment_manager_separately_from_ui_context(controller):
+def test_input_resolves_controller_and_bypass_managers_separately_from_ui_context(controller):
     c = controller
-    assert OBJ != MANAGER
+    assert len({OBJ, MANAGER, CONTROLLERS}) == 3
     c.add(); c.assign(0, [1])
     listener = c.m.read(OBJ, 0x70)
     c.tick(); c.writes.clear()
     c.key(1); c.key(2)
-    assert c.writes == [(1, 6, 1)]
+    assert c.writes == [(1, 7, 1)]
     assert c.m.read(OBJ, 0x70) == listener
     assert c.m.calls(0x28d96084)
-    assert all(args[0] == MANAGER + 4 for args in c.m.calls(0x28e24c00))
+    assert all(args[0] == CONTROLLERS+4 for args in c.m.calls(0x28e24c00))
 
 
 @pytest.mark.firmware
-@pytest.mark.parametrize('slot', [6, 7])
+@pytest.mark.parametrize('slot', [7, 8])
 def test_native_transport_writer_uses_effect_parameter_space(m4emu, slot):
     """The real native getter must validate an effect control, not a special field."""
     read = reader(stock_e0())
@@ -656,8 +778,8 @@ def test_native_transport_writer_uses_effect_parameter_space(m4emu, slot):
     m.u8(0x2843ebb8, 2)
     m.u8(node + 5, 1)
     m.u8(node + 0x28, 8)            # native delay host
-    m.u32(node + 0x60, 1)          # one special field; index 5/6 must reject here
-    m.u32(node + 0x64, 7)          # seven real Micro controls
+    m.u32(node + 0x60, 1)          # one special field; indices6/7 must reject here
+    m.u32(node + 0x64, 8)          # eight real Atmosphere controls
     m.u8(node + 0x90 + (slot-1)*0x2c, 1)
     m.u32(node + 0x94 + (slot-1)*0x2c, 0)
     m.stub(0x28e05d34, lambda m: m.reg('r0', DSP))
@@ -693,11 +815,11 @@ def test_variant_replacement_with_retained_native_object_and_link_rebinds_model_
     replacement = next(effect.preset_id for effect in MODELS if effect.preset_id != c.model)
     c.models[1] = replacement
     c.tick()
-    assert c.writes == [(1, 6, 0), (1, 7, 0)]
+    assert c.writes == [(1, 7, 0), (1, 8, 0)]
     route, = c.routes()
     assert struct.unpack_from('<I', route, 28)[0] == replacement
     assert struct.unpack_from('<I', route, 48)[0] == replacement
     c.writes.clear(); c.key(2)
     assert c.writes == []
     c.key(1); c.key(2)
-    assert c.writes == [(1, 6, 1)]
+    assert c.writes == [(1, 7, 1)]

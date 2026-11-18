@@ -72,7 +72,7 @@ def test_registry_uses_only_custom_callbacks_and_no_private_pm(effect):
     record = native.registry(effect.primitive, 0xe4000, 0xe5000, effect=effect)
     assert record == [effect.primitive, symbols[effect.callbacks.init], 0, 0,
                       symbols[native.CONTROL_ENTRY], 0xe4000, 163, 0]
-    assert native.instructions() == 37
+    assert native.instructions() == 41
     for base in (-2, 1):
         with pytest.raises(ValueError):
             native.assemble(base)
@@ -96,15 +96,15 @@ def test_init_resets_exactly_transport_and_marker_without_sdram_or_ir_globals(fi
     invoke(sim, short, symbols, init=True, channels=channels)
     expected = list(before)
     expected[14] = channels
-    for offset in (10, 11, 20):
+    for offset in (10, 11, 15, 20):
         expected[offset] = 0
     assert [sim.rd(STATE + j) for j in range(native.STATE_WORDS)] == expected
     assert sim.rd(STATE - 1) == sim.rd(STATE + native.STATE_WORDS) == 0xdeadbeef
-    assert set(writes) == {VALUE, STACK, STACK - 1, STATE + 10, STATE + 11, STATE + 14, STATE + 20}
+    assert set(writes) == {VALUE, STACK, STACK - 1, STATE + 10, STATE + 11, STATE + 14, STATE + 15, STATE + 20}
 
 
 @pytest.mark.firmware
-@pytest.mark.parametrize('pid', range(5, 12))
+@pytest.mark.parametrize('pid', [*range(5, 12), 15])
 @pytest.mark.parametrize('value', [0, 1, 0x3f000000, 0xbf800000, 0x7fc01234, 0xffffffff])
 def test_control_stores_raw_word_only_in_requested_instance_parameter(firmware, pid, value):
     sim, short, symbols = setup(firmware)
@@ -124,7 +124,7 @@ def test_control_stores_raw_word_only_in_requested_instance_parameter(firmware, 
 
 
 @pytest.mark.firmware
-@pytest.mark.parametrize('pid', [0, 1, 4, 12, 14, 144, 199, 0xffffffff])
+@pytest.mark.parametrize('pid', [0, 1, 4, 12, 13, 14, 16, 144, 199, 0xffffffff])
 def test_invalid_control_id_returns_without_value_or_descriptor_dereference(firmware, pid):
     sim, short, symbols = setup(firmware)
     reads = []
@@ -176,11 +176,11 @@ def test_actual_primitive_init_dispatcher_passes_descriptor_and_ignores_status(f
     sim.set(15, INSTANCE)  # retained original R4 at actual0x177a00
     sim.set(0x15, INSTANCE)
     sim.set(0x14, registry)
-    for offset in (10, 11, 20):
+    for offset in (10, 11, 15, 20):
         sim.wr(STATE + offset, 0xffffffff)
     run_actual_dispatch(sim, short, 0x177a55, 0x177a8a)
     assert sim.get(4) == INSTANCE
-    assert [sim.rd(STATE + offset) for offset in (10, 11, 20)] == [0, 0, 0]
+    assert [sim.rd(STATE + offset) for offset in (10, 11, 15, 20)] == [0, 0, 0, 0]
     assert sim.rd(INSTANCE + 31) == symbols[native.INIT_ENTRY]
     assert sim.rd(INSTANCE + 32) == sim.rd(INSTANCE + 33) == 0x1779e7
     assert sim.rd(INSTANCE + 34) == symbols[native.CONTROL_ENTRY]
@@ -194,7 +194,7 @@ def test_actual_primitive_init_dispatcher_passes_descriptor_and_ignores_status(f
 
 
 @pytest.mark.firmware
-@pytest.mark.parametrize('pid', range(5, 12))
+@pytest.mark.parametrize('pid', [*range(5, 12), 15])
 def test_actual_control_dispatcher_passes_pid_value_pointer_and_descriptor(firmware, pid):
     sim, short, symbols = setup(firmware)
     sim.wr(STATE + 20, 1)  # live instance: its first audio block has run
@@ -215,7 +215,7 @@ def test_actual_control_dispatcher_passes_pid_value_pointer_and_descriptor(firmw
 
 
 @pytest.mark.firmware
-@pytest.mark.parametrize('pid', [10, 11])
+@pytest.mark.parametrize('pid', [10, 11, 15])
 @pytest.mark.parametrize('value', [0, 1, 0xffffffff])
 def test_unprocessed_instance_discards_transport_without_reading_value(firmware, pid, value):
     sim, short, symbols = setup(firmware)
@@ -228,7 +228,7 @@ def test_unprocessed_instance_discards_transport_without_reading_value(firmware,
     sim.rd = record
     invoke(sim, short, symbols, pid=pid, value=value)
     assert VALUE not in reads
-    assert sim.rd(STATE + 10) == sim.rd(STATE + 11) == 0
+    assert sim.rd(STATE + 10) == sim.rd(STATE + 11) == sim.rd(STATE + 15) == 0
 
 
 @pytest.mark.firmware
@@ -248,9 +248,9 @@ def test_native_callbacks_feed_real_bridge_and_stale_saved_transport_cannot_capt
     invoke(sim, short, symbols, init=True, channels=channels)
     assert sim.rd(0x400000) == ssim.f2b(.875)
     for pid, value in ((5, mode), (6, ssim.f2b(.5)), (7, ssim.f2b(.75)),
-                       (8, ssim.f2b(1.)), (9, ssim.f2b(.5)), (10, 1), (11, 1)):
+                       (8, ssim.f2b(1.)), (9, ssim.f2b(.5)), (10, 1), (11, 1), (15, 1)):
         invoke(sim, short, symbols, pid=pid, value=value)
-    assert sim.rd(STATE + 10) == sim.rd(STATE + 11) == 0
+    assert sim.rd(STATE + 10) == sim.rd(STATE + 11) == sim.rd(STATE + 15) == 0
     assert [sim.rd(STATE + pid) for pid in range(5, 10)] == [
         mode, ssim.f2b(.5), ssim.f2b(.75), ssim.f2b(1.), ssim.f2b(.5)]
     dry = [(.125 + frame/256., -.25 - frame/128.) for frame in range(16)]
@@ -263,7 +263,14 @@ def test_native_callbacks_feed_real_bridge_and_stale_saved_transport_cannot_capt
     assert sim.rd(STATE + 26) == 0
     assert sim.rd(STATE + 111) == 0
     assert sim.rd(STATE + 113) == 1
-    # The first physical capture after publication succeeds immediately. No
+    # Raw Loop is a request for the M4 gesture owner; it cannot operate the DSP
+    # transport directly, even once native controller writes are accepted.
+    invoke(sim, short, symbols, pid=15, value=1)
+    assert sim.rd(STATE + 15) == 1
+    assert audio.block(dry) == dry
+    assert sim.rd(STATE + 26) == 0
+    invoke(sim, short, symbols, pid=15, value=0)
+    # The first owned capture after publication succeeds immediately. No
     # second Listen delivery or second tap is needed to undo saved controls.
     invoke(sim, short, symbols, pid=10, value=1)
     output = audio.block([.375] * 16 if channels==1 else [(.375, -.5)] * 16)

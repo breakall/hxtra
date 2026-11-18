@@ -36,7 +36,7 @@ class Binding:
 
     def ready(self):
         assert self.update() == 1
-        assert self.writes == [(CTX, BLOCK, 6, 0), (CTX, BLOCK, 7, 0)]
+        assert self.writes == [(CTX, BLOCK, 7, 0), (CTX, BLOCK, 8, 0)]
         self.writes.clear()
 
 
@@ -46,21 +46,21 @@ def test_tap_capture_hold_overdub_release_and_tap_resume_listening(m4emu, model)
     assert b.update(True, 10) == 1
     assert b.writes == []
     assert b.update(False, 20) == 1
-    assert b.writes == [(CTX, BLOCK, 6, 1)]
+    assert b.writes == [(CTX, BLOCK, 7, 1)]
     b.writes.clear()
     b.update(True, 30)
     b.update(True, 400029)
     assert b.writes == []
     b.update(True, 400030)
     b.update(True, 400031)
-    assert b.writes == [(CTX, BLOCK, 7, 1)]
+    assert b.writes == [(CTX, BLOCK, 8, 1)]
     b.update(False, 400032)
     b.update(False, 400033)
-    assert b.writes == [(CTX, BLOCK, 7, 1), (CTX, BLOCK, 7, 0)]
+    assert b.writes == [(CTX, BLOCK, 8, 1), (CTX, BLOCK, 8, 0)]
     b.writes.clear()
     b.update(True, 400040)
     b.update(False, 400041)
-    assert b.writes == [(CTX, BLOCK, 6, 0)]
+    assert b.writes == [(CTX, BLOCK, 7, 0)]
 
 
 @pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
@@ -79,7 +79,7 @@ def test_new_binding_initializes_listen_and_stops_overdub_without_capturing(m4em
     b.writes.clear()
     b.bind(generation=2)
     b.update(False, 400040)
-    assert b.writes == [(CTX, BLOCK, 6, 0), (CTX, BLOCK, 7, 0)]
+    assert b.writes == [(CTX, BLOCK, 7, 0), (CTX, BLOCK, 8, 0)]
     assert b.m.u32(STATE + 16) == b.m.u32(STATE + 20) == 0
     b.writes.clear(); b.update(False, 400050)
     assert b.writes == []
@@ -89,7 +89,7 @@ def test_new_binding_initializes_listen_and_stops_overdub_without_capturing(m4em
 def test_initial_pressed_level_is_not_a_restored_capture_command(m4emu, model):
     b = Binding(m4emu, model)
     b.update(True, 20)
-    assert b.writes == [(CTX, BLOCK, 6, 0), (CTX, BLOCK, 7, 0)]
+    assert b.writes == [(CTX, BLOCK, 7, 0), (CTX, BLOCK, 8, 0)]
     b.writes.clear()
     b.update(True, 400020); b.update(False, 400021)
     assert b.writes == []
@@ -112,11 +112,11 @@ def test_failed_writes_retry_without_overtaking_or_losing_tap(m4emu, model):
     b.update(True, 10)
     b.fail = True
     assert b.update(False, 20) == 5
-    assert b.writes == [(CTX, BLOCK, 6, 1)]
+    assert b.writes == [(CTX, BLOCK, 7, 1)]
     assert b.update(False, 21) == 5
     b.fail = False
     assert b.update(False, 22) == 1
-    assert b.writes == [(CTX, BLOCK, 6, 1)] * 3
+    assert b.writes == [(CTX, BLOCK, 7, 1)] * 3
     assert b.m.u32(STATE + 24) == 0
     b.writes.clear(); b.update(False, 23)
     assert b.writes == []
@@ -126,10 +126,10 @@ def test_failed_writes_retry_without_overtaking_or_losing_tap(m4emu, model):
 def test_initial_listen_write_failure_prevents_overdub_write_until_retry(m4emu, model):
     b = Binding(m4emu, model); b.fail = True
     assert b.update(False, 0) == 5
-    assert b.writes == [(CTX, BLOCK, 6, 0)]
+    assert b.writes == [(CTX, BLOCK, 7, 0)]
     b.fail = False
     assert b.update(False, 1) == 1
-    assert b.writes == [(CTX, BLOCK, 6, 0), (CTX, BLOCK, 6, 0), (CTX, BLOCK, 7, 0)]
+    assert b.writes == [(CTX, BLOCK, 7, 0), (CTX, BLOCK, 7, 0), (CTX, BLOCK, 8, 0)]
 
 
 @pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
@@ -139,10 +139,10 @@ def test_cancel_stops_overdub_clears_state_and_cannot_synthesize_a_tap(m4emu, mo
     b.update(True, 30); b.update(True, 400030)
     b.writes.clear()
     assert b.cancel() == 1
-    assert b.writes == [(CTX, BLOCK, 7, 0)]
+    assert b.writes == [(CTX, BLOCK, 8, 0)]
     assert b.m.read(STATE, 32) == bytes(32)
     b.writes.clear(); b.update(False, 400040)
-    assert b.writes == [(CTX, BLOCK, 6, 0), (CTX, BLOCK, 7, 0)]
+    assert b.writes == [(CTX, BLOCK, 7, 0), (CTX, BLOCK, 8, 0)]
 
 
 @pytest.mark.parametrize('model', [effect.preset_id for effect in MODELS])
@@ -174,7 +174,7 @@ def test_two_block_bindings_keep_independent_transport_and_sentinels(m4emu, mode
     b.update(True, 30); b.update(True, 400030)
     b.update(True, 400040, other_state, other_binding)
     b.update(False, 400050, other_state, other_binding)
-    assert b.writes == [(CTX, BLOCK, 6, 1), (CTX, BLOCK, 7, 1), (CTX, 74, 6, 1)]
+    assert b.writes == [(CTX, BLOCK, 7, 1), (CTX, BLOCK, 8, 1), (CTX, 74, 7, 1)]
     assert b.m.read(STATE - 4, 4) == b'LEFT'
     assert b.m.read(STATE + 32, 4) == b'MIDL'
     assert b.m.read(other_state + 32, 4) == b'RGHT'
@@ -184,9 +184,9 @@ def test_two_block_bindings_keep_independent_transport_and_sentinels(m4emu, mode
 def test_wraparound_time_is_forwarded_to_gesture_without_a_long_press(m4emu, model):
     b = Binding(m4emu, model); b.ready()
     b.update(True, 0xffffff00); b.update(False, 0xffffff80)
-    assert b.writes == [(CTX, BLOCK, 6, 1)]
+    assert b.writes == [(CTX, BLOCK, 7, 1)]
     b.update(True, 0xfffffff0); b.update(True, 0xfffffff0 + 400000)
-    assert b.writes[-1] == (CTX, BLOCK, 7, 1)
+    assert b.writes[-1] == (CTX, BLOCK, 8, 1)
 
 
 def test_native_module_is_explicit_and_development_feature_is_default_off():
@@ -207,13 +207,13 @@ def test_ordinary_builds_do_not_install_unfinished_native_bindings(env):
     from firmware import built
     read, on = built(env)
     assert 'microlooper' not in on
-    assert read(microlooper.BYPASS_FILTER_SITE, 4) == microlooper.BYPASS_FILTER_STOCK
+    assert read(microlooper.BYPASS_SITE, 4) == microlooper.BYPASS_STOCK
     assert read(microlooper.PARAMETER_FILTER_SITE, 4) == microlooper.PARAMETER_FILTER_STOCK
     assert struct.unpack('<I', read(microlooper.TICK_LITERAL, 4))[0] == microlooper.TICK_STOCK
 
 
 @pytest.mark.firmware
-@pytest.mark.parametrize('slot,value', [(6, 0), (6, 1), (7, 0), (7, 29)])
+@pytest.mark.parametrize('slot,value', [(7, 0), (7, 1), (8, 0), (8, 29)])
 def test_native_bool_writer_runs_actual_stock_setter_and_preserves_typed_descriptor(m4emu, slot, value):
     from firmware import reader, stock_e0
     e0 = stock_e0(); read = reader(e0)
@@ -232,31 +232,10 @@ def test_native_bool_writer_runs_actual_stock_setter_and_preserves_typed_descrip
     assert seen == [(CTX, 1, struct.pack('<3I', 0xfffffffe, slot - 1, 0), bytes([1, bool(value), 0, 0, 0]))]
 
 
-def test_native_writer_rejects_non_transport_slots_without_calling_firmware(m4emu):
+@pytest.mark.parametrize('slot', [1, 5, 6, 9])
+def test_native_writer_rejects_non_transport_slots_without_calling_firmware(m4emu, slot):
     b = Binding(m4emu)
-    assert b.m.call(CODE + b.symbols['microlooper_native_write'], CTX, 1, 5, 1) == 0xfffffffd
-
-
-@pytest.mark.parametrize('kind,model,status,match', [(1, 380, 0, True), (1, 381, 0, True), (1, 555, 0, False),
-                                                  (1, 380, -1, False), (2, 380, 0, False),
-                                                  (3, 380, 0, False)])
-def test_native_node_filter_is_selective_and_never_rewrites_assignments(m4emu, kind, model, status, match):
-    b = Binding(m4emu)
-    node, out = BINDING + 0x100, BINDING + 0x200
-    raw = bytearray(0x38)
-    struct.pack_into('<I', raw, 0, 0x28609000)
-    raw[9] = kind
-    struct.pack_into('<I', raw, 12, 5)
-    b.m.write(node, raw); b.m.u32(out, 0xdeadbeef)
-
-    def lookup(m):
-        assert (m.reg('r0'), m.reg('r1')) == (CTX, 5)
-        m.write(m.reg('r2'), bytes([0]) + struct.pack('<I', model) + bytes(47))
-        m.reg('r0', status)
-    b.m.stub(0x28e0fe94, lookup)
-    assert b.m.call(CODE + b.symbols['microlooper_native_node_match'], CTX, node, out) == int(match)
-    assert b.m.u32(out) == (5 if match else 0xdeadbeef)
-    assert b.m.read(node, len(raw)) == bytes(raw)
+    assert b.m.call(CODE + b.symbols['microlooper_native_write'], CTX, 1, slot, 1) == 0xfffffffd
 
 
 @pytest.mark.firmware
@@ -331,17 +310,17 @@ def test_stock_tick_listener_shares_queued_dispatch_and_preserves_native_tick(m4
 
 
 @pytest.mark.firmware
-@pytest.mark.parametrize('first_model,expected_blocks', [(380, [6]), (381, [6]), (147, [5, 6]), (555, [5, 6])])
-def test_native_bypass_filter_skips_only_looper_node_in_actual_dispatch(m4emu, first_model, expected_blocks):
+@pytest.mark.parametrize('first_model', [380, 381, 147, 555])
+def test_native_bypass_remains_stock_for_atmosphere_and_other_blocks(m4emu, first_model):
     import patch_menu as pm
     from firmware import reader, stock_e0
-    read = reader(stock_e0())
+    patch = pm.Patch(stock_e0(), [], {})
+    microlooper.install(patch); patch.finish_chains()
+    read = reader(patch.entry0())
     b = Binding(m4emu)
     native, obj, first, second = 0x28dd10c0, 0x28601000, 0x28602000, 0x28602100
     b.m.load(native, read(native, 0x3e0))
-    assert read(microlooper.BYPASS_FILTER_SITE, 4) == microlooper.BYPASS_FILTER_STOCK
-    b.m.load(microlooper.BYPASS_FILTER_SITE,
-             pm.thumb_bw(microlooper.BYPASS_FILTER_SITE, CODE + b.symbols['microlooper_native_bypass_filter']))
+    assert read(microlooper.BYPASS_SITE, 4) == microlooper.BYPASS_STOCK
     head = obj + 0x20
     b.m.u32(head, first)
     for node, next_node, block in ((first, second, 5), (second, head, 6)):
@@ -382,8 +361,8 @@ def test_native_bypass_filter_skips_only_looper_node_in_actual_dispatch(m4emu, f
         m.reg('r0', 0)
     b.m.stub(0x28e0f884, bypass)
     b.m.call(native, obj, 0)
-    assert sent == [(CTX, block, 1, 1) for block in expected_blocks]
-    assert b.m.read(first + 32, 4) == (b'\x01RGB' if first_model in (380, 381) else b'\x00NEW')
+    assert sent == [(CTX, block, 1, 1) for block in (5, 6)]
+    assert b.m.read(first + 32, 4) == b'\x00NEW'
     assert b.m.read(second + 32, 4) == b'\x00NEW'
 
 
@@ -397,11 +376,14 @@ def install_parameter_filter(b, read):
 
 
 @pytest.mark.firmware
-@pytest.mark.parametrize('model,selector,index,allowed', [(147, -2, 5, True), (381, -2, 5, False), (381, -2, 6, False),
-                                                        (381, -2, 4, True), (381, -3, 5, True),
-                                                        (380, -2, 5, False), (380, -2, 6, False),
-                                                        (380, 380, 5, False), (555, -2, 5, True),
-                                                        (380, -2, 4, True), (380, -3, 5, True)])
+@pytest.mark.parametrize('model,selector,index,allowed', [
+    (147, -2, 6, True), (555, -2, 6, True),
+    (380, -2, 5, True), (381, -2, 5, True),  # public Loop remains an ordinary parameter
+    (380, -2, 6, False), (381, -2, 6, False),
+    (380, -2, 7, False), (381, -2, 7, False),
+    (380, 380, 6, False), (381, 381, 7, False),
+    (380, -2, 4, True), (381, -3, 6, True), (380, -3, 7, True),
+])
 def test_native_parameter_filter_blocks_external_transport_only(m4emu, model, selector, index, allowed):
     from firmware import reader, stock_e0
     b = Binding(m4emu)
@@ -437,12 +419,12 @@ def test_native_parameter_filter_authorizes_only_actual_native_writer_return_add
         seen.append((m.reg('r0'), m.reg('r1'), m.read(m.reg('r2'), 12), m.read(m.reg('r3'), 5)))
         m.reg('r0', 0)
     b.m.stub(0x28e02040, lower)
-    assert b.m.call(CODE + b.symbols['microlooper_native_write'], CTX, 1, 6, 1) == 0
-    assert seen == [(CTX, 1, struct.pack('<3I', 0xfffffffe, 5, 0), b'\x01\x01\x00\x00\x00')]
+    assert b.m.call(CODE + b.symbols['microlooper_native_write'], CTX, 1, 7, 1) == 0
+    assert seen == [(CTX, 1, struct.pack('<3I', 0xfffffffe, 6, 0), b'\x01\x01\x00\x00\x00')]
 
 
 @pytest.mark.firmware
-def test_native_node_match_handles_actual_getter_success_without_info_for_invalid_block(m4emu):
+def test_native_parameter_filter_handles_actual_getter_success_without_info_for_invalid_block(m4emu):
     from firmware import reader, stock_e0
     b = Binding(m4emu)
     read = reader(stock_e0())
@@ -453,19 +435,12 @@ def test_native_node_match_handles_actual_getter_success_without_info_for_invali
     b.m.stub(0x28e05c50, lambda m: m.reg('r0', 1))
     b.m.stub(0x28e07328, lambda m: m.reg('r0', -3))
     node, out = BINDING + 0x100, BINDING + 0x200
-    b.m.u8(node + 9, 1)
-    b.m.u32(node + 12, 0xffffffff)
     b.m.write(out, b'?' * 52)
     assert b.m.call(0x28e0fe94, CTX, 0xffffffff, out) == 0
     assert b.m.read(out, 52) == b'?' * 52  # stock success0 does not imply filled record
-    b.m.u32(out, 0xdeadbeef)
-    # A previous stack occupant looked like model380: it must not create a match.
-    b.m.u32(m4emu.STACK_TOP - 72 + 1, 380)
-    assert b.m.call(CODE + b.symbols['microlooper_native_node_match'], CTX, node, out) == 0
-    assert b.m.u32(out) == 0xdeadbeef
     install_parameter_filter(b, read)
     descriptor, value = BINDING + 0x300, BINDING + 0x320
-    b.m.write(descriptor, struct.pack('<3I', 0xfffffffe, 5, 1))
+    b.m.write(descriptor, struct.pack('<3I', 0xfffffffe, 6, 1))
     b.m.write(value, b'\x01\x01\x00\x00\x00')
     b.m.u32(m4emu.STACK_TOP - 96 + 1, 380)
     b.m.stub(0x28e02040, lambda m: m.reg('r0', -3))
@@ -473,37 +448,49 @@ def test_native_node_match_handles_actual_getter_success_without_info_for_invali
 
 
 @pytest.mark.parametrize('capacity', [0, 1, 3])
-def test_native_assignment_snapshot_copies_ids_under_native_lock_without_exposing_nodes(m4emu, capacity):
+def test_native_assignment_snapshot_copies_explicit_loop_ids_under_controller_lock(m4emu, capacity):
     b = Binding(m4emu)
+    b.m.stub(0x28d96084, lambda m: m.reg('r0', 0x28128b4c))
+    b.m.stub(0x28dd83c4, lambda m: m.reg('r0', 1))
     manager, out = 0x28601000, 0x28604000
-    head, nodes = manager + 0x60, [0x28602000 + i * 0x40 for i in range(4)]
-    b.m.u32(head, nodes[0])
-    for node, next_node, kind, block in zip(nodes, nodes[1:] + [head], [1, 2, 3, 1], [5, 20, 21, 7]):
-        b.m.u32(node, next_node)
-        b.m.u8(node + 9, kind)
-        b.m.u32(node + 12, block)
-    b.m.write(out - 4, b'LEFT' + b'?' * 12 + b'RGHT')
+    nodes = [manager+0xac+0x48*i for i in range(64)]
+    for node in nodes:
+        b.m.u8(node+0x44, 0x40)
+    for index, block in ((0, 5), (1, 20), (2, 21), (3, 7), (4, 99), (5, 33), (6, 44)):
+        node = nodes[index]
+        b.m.u8(node+0x10, 5)  # FS3: controller switch_index+3
+        b.m.u8(node+0x18, 1); b.m.u32(node+0x1c, 0)
+        b.m.u8(node+0x20, 1); b.m.u32(node+0x24, 1)
+        b.m.u8(node+0x28, 0); b.m.u32(node+0x2c, block)
+        b.m.u32(node+0x30, 0xfffffffe); b.m.u32(node+0x34, 5)
+        b.m.u8(node+0x38, 0); b.m.u32(node+0x3c, 0)
+        b.m.u8(node+0x44, index); b.m.u8(node+0x45, 1)
+    b.m.u8(nodes[1]+0x28, 2)  # a standard bypass-controller assignment
+    b.m.u32(nodes[2]+0x34, 4)  # ordinary Mix, not Loop
+    b.m.u8(nodes[4]+0x44, 0x40)
+    b.m.u32(nodes[5]+0x30, 0xfffffffd)  # secondary model
+    b.m.u32(nodes[6]+0x1c, 1); b.m.u32(nodes[6]+0x24, 0)  # reversed bounds
+    b.m.write(out-4, b'LEFT'+b'?'*12+b'RGHT')
     order = []
 
     def lock(m):
-        assert m.reg('r0') == manager + 4
-        assert m.read(out, 12) == b'?' * 12
+        assert m.reg('r0') == manager+4
+        assert m.read(out, 12) == b'?'*12
         order.append('lock')
 
     def unlock(m):
-        assert m.reg('r0') == manager + 4
-        assert m.read(out, min(capacity, 2) * 4) == struct.pack('<2I', 5, 7)[:capacity * 4]
+        assert m.reg('r0') == manager+4
+        assert m.read(out, min(capacity, 2)*4) == struct.pack('<2I', 5, 7)[:capacity*4]
         order.append('unlock')
-        # IDs already copied remain useful without retaining these pointers.
         for node in nodes:
-            m.write(node, b'\xff' * 0x38)
+            m.write(node, b'\xff'*0x48)
     b.m.stub(0x28e24c00, lock)
     b.m.stub(0x28e24bb0, unlock)
-    assert b.m.call(CODE + b.symbols['microlooper_native_assignment_ids'], manager, 2, out, capacity) == 2
+    assert b.m.call(CODE+b.symbols['microlooper_native_assignment_ids'], manager, 2, out, capacity) == 2
     assert order == ['lock', 'unlock']
-    assert b.m.read(out - 4, 4) == b'LEFT'
-    assert b.m.read(out + min(capacity, 2) * 4, 12 - min(capacity, 2) * 4) == b'?' * (12 - min(capacity, 2) * 4)
-    assert b.m.read(out + 12, 4) == b'RGHT'
+    assert b.m.read(out-4, 4) == b'LEFT'
+    assert b.m.read(out+min(capacity, 2)*4, 12-min(capacity, 2)*4) == b'?'*(12-min(capacity, 2)*4)
+    assert b.m.read(out+12, 4) == b'RGHT'
 
 
 def test_invalid_switch_assignment_snapshot_does_not_call_firmware(m4emu):
@@ -568,16 +555,16 @@ class Router(Binding):
 def test_per_binding_router_keeps_other_blocks_press_release_and_suppresses_one_second_hold(m4emu, model):
     b = Router(m4emu, model)
     assert b.event(1, 10) == b.event(2, 20) == b.event(3, 21) == 1
-    assert b.writes == [(CTX, BLOCK, 6, 1)]
+    assert b.writes == [(CTX, BLOCK, 7, 1)]
     b.writes.clear()
     b.event(1, 30)
     assert b.tick(400029) == 1
     assert b.writes == []
     assert b.tick(400030) == 1
     assert b.event(5, 1000030) == 1
-    assert b.writes == [(CTX, BLOCK, 7, 1)]
+    assert b.writes == [(CTX, BLOCK, 8, 1)]
     b.event(2, 1000040); b.event(3, 1000041)
-    assert b.writes == [(CTX, BLOCK, 7, 1), (CTX, BLOCK, 7, 0)]
+    assert b.writes == [(CTX, BLOCK, 8, 1), (CTX, BLOCK, 8, 0)]
     assert b.stock_events == [(1, 12, k) for k in (1, 2, 3, 1, 2, 3)]
     assert b.m.calls(0x28d96588) == []
 
@@ -602,7 +589,7 @@ def test_tick_retries_failed_transport_without_replaying_other_blocks(m4emu, mod
     assert b.tick(21) == 5
     b.fail = False
     assert b.tick(22) == 1
-    assert b.writes == [(CTX, BLOCK, 6, 1)] * 3
+    assert b.writes == [(CTX, BLOCK, 7, 1)] * 3
     assert b.stock_events == [(1, 12, 1), (1, 12, 2)]
 
 
@@ -624,22 +611,7 @@ def test_replacing_variant_with_reused_handle_and_generation_resets_transport(m4
     assert b.cancel() == 0, 'old variant cannot cancel its replacement'
     assert b.writes == []
     b.update(True, 400040)
-    assert b.writes == [(CTX, BLOCK, 6, 0), (CTX, BLOCK, 7, 0)]
+    assert b.writes == [(CTX, BLOCK, 7, 0), (CTX, BLOCK, 8, 0)]
     assert b.m.u32(STATE + 28) == replacement
     b.writes.clear(); b.update(False, 400050)
     assert b.writes == [], 'release from the old variant cannot capture'
-
-
-@pytest.mark.parametrize('model,target', [(380, 0x28dd1186), (381, 0x28dd1186), (555, 0x28dd11ae)])
-def test_inline_bypass_identity_check_preserves_native_live_registers_and_return(m4emu, model, target):
-    b = Binding(m4emu)
-    b.m.write(m4emu.STACK_TOP + 29, struct.pack('<I', model))
-    b.m.u8(m4emu.STACK_TOP + 40, 0x6b)
-    b.m.reg('r12', 0x12345678)
-    observed = []
-    for destination in (0x28dd1186, 0x28dd11ae):
-        b.m.stub(destination, lambda m, at=destination: observed.append(
-            (at, m.reg('r0'), m.reg('r1'), m.reg('r2'), m.reg('r3'), m.reg('r12'), m.reg('lr'))))
-    b.m.call(CODE + b.symbols['microlooper_native_bypass_filter'], 12, 34, 56, 78)
-    assert observed == [(target, 12, 34, 56, 78 if model in (380, 381) else 0x6b,
-                         0x12345678, m4emu.RETURN | 1)]

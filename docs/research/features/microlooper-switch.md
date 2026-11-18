@@ -1,5 +1,76 @@
 # Atmosphere-looper native footswitch and transport routing
 
+## Explicit Loop controller assignment
+
+2026-11-17. This is the current mono/stereo control contract. The original
+bypass-based adapter documented below is historical.
+
+**[verified offline: declaration and native callbacks]** Both models expose
+**Loop** as their sixth control (public slot 6, DSP PID 15, state index 5). Hidden
+Play/Overdub move to slots 7/8 and state indices 6/7, retaining DSP PIDs 10/11.
+Initialization clears Loop, Play, Overdub and marker 20. Construction-time
+transport delivery is ignored. Live Loop writes use the ordinary native setter;
+they describe a value and do not manufacture a physical gesture. Only the
+explicit FS1–FS5 assignment's physical press/release drives the gesture module.
+The initializer/control module grows from 37 to 41 instructions; the processing
+core, bridge, private memory sizes and history buffers are unchanged.
+
+**[verified offline: native constructor, driver and UI]** Controller manager
+getter `0x28d9608c` returns `0x28125d30`, with its mutex at +4 and 64 records at
+`+0xac`, stride `0x48`. An allocated ordinary parameter assignment has kind 0 at
+`+0x28`, controller 3..7 at `+0x10`, target block ID at `+0x2c`, primary selector -2
+at `+0x30`, parameter index 5 at `+0x34`, special flag 0 at `+0x38` and model side 0
+at `+0x3c`. Bool bounds use type/value pairs `(+0x18,+0x1c)=(1,0)` and
+`(+0x20,+0x24)=(1,1)`. Byte `+0x44` holds slot 0..63 or the free marker `0x40`.
+Byte `+0x45` is not an eligibility flag: the constructor and parser differ there.
+The bounded scanner checks these fields; bypass nodes, hidden transport
+assignments, secondary-model assignments and reversed bounds do not authorize
+loop gestures.
+
+The native constructor is `0x28dded64`; driver `0x28dde408` forwards the typed bool
+and primary parameter descriptor through `0x28e04864`. Controller Assign's Type
+knob `0x28d90948` changes the shared per-switch flag at bypass manager
+`+0x28+32*k`; getter `0x28dd83c4` reads it under that manager's mutex. Loop routing
+requires **Momentary** and never changes it automatically. The current scanner
+uses the controller mutex only after the Momentary getter returns.
+
+**[verified offline: standard persistence and snapshots]** Parameter assignments
+use preset section 4 (section 3 is Bypass Assign; section 2 is Command Center).
+Tests execute the real writer `0x28de0d3c` and parser `0x28de0f24`, then the full
+preset codec, retaining ordinary EXP assignments and unrelated sections.
+Node byte `+0x40` is serialized as key 13 and controls snapshot restoration of FS
+parameter values; native assignments default to restoration enabled. Restoring
+Loop=On cannot cause capture/overdub because it creates no physical input edge.
+The held-input inhibition also prevents old releases acting on a new binding.
+
+**[verified offline: independent bypass]** No hook is installed at the native
+bypass dispatcher `0x28dd11aa`; image verification requires its stock bytes.
+An Atmosphere Bypass Assign performs the same latch, RGB and bypass writes as
+an ordinary block. A bypass-only assignment never creates a loop route.
+Play/Overdub setter protection remains, while public Loop writes pass normally.
+
+**[verified offline: nonnested locking and ownership]** Native constructor paths
+hold controller then graph locks; the native driver also contains graph then
+controller locking. The adapter introduces neither nesting order. It reads a
+module-owned graph epoch under graph lock, releases it, copies assignments under
+controller lock, releases that, then reacquires graph ownership and checks the
+epoch before resolving block IDs. Existing lifecycle veneers increment the
+epoch before mutation and hold graph ownership through the native operation.
+A changed epoch suspends held gestures and overdub, preserves Play, and retries
+discovery on the next tick. Snapshot storage is local to each invocation.
+Binding IDs use a separate counter so unrelated route creation cannot interrupt
+an active overdub. No native assignment pointer escapes its mutex.
+
+**[verified on unit: mono control checkpoint]** The clean image boots from RAM
+with an unassigned mono block. The user configured Loop through Controller
+Assign on FS2 (middle), Momentary, and confirmed capture/playback plus held
+Overdub and release. A separate native FS1 (left), Latching bypass mutes the
+loop while live guitar continues, then restores it. Native readback confirms
+both independent assignments. See [the hardware log](microlooper-hardware-log.md#explicit-loop-controller-assignment).
+Stereo, Envelope, snapshot and save/reload qualification remain outstanding.
+
+## Historical bypass-based adapter
+
 Research date: 2026-11-14. Scope: the M4 side of the HX Stomp micro-looper, model ID 380 (`HD2_AtmosphereStereo`). The explicit development build now installs input, polling and lifecycle routing through `HX_MICRO_LOOPER`; it is default-off and excluded from browser selection. Ordinary builds retain their existing behavior. No firmware was installed, no hardware session was opened and no on-unit behavior is claimed here.
 
 Evidence follows [research conventions](../conventions.md). Input is stock HX Stomp 3.80.0, MD5 `a2cd8f4ae56f49415380270ebc484bf1`. Findings come from targeted Thumb disassembly using the installed `arm-none-eabi-objdump`, existing firmware parsers, and Unicorn tests that load original functions directly from the user-supplied fixture. No extracted Line 6 code or data is stored in the repository. Existing system references: [footswitches](../m4/footswitches.md), [snapshots](../m4/snapshots.md), [editor service](../m4/usb-editor.md), and [microsecond clock](../m4/tempo-and-leds.md).

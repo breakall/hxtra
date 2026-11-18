@@ -48,7 +48,7 @@ def test_registers_native_graph_and_unchanged_stock_models_with_native_cost(regi
     model = kit.find_model(info, effect.name)
     assert [(p['name'], p['slot'], p['type']) for p in model['params']] == [
         (p.name, p.slot, p.type) for p in effect.parameters]
-    assert model['meta']['displayParamCount'] == '5'
+    assert model['meta']['displayParamCount'] == '6'
     e0 = kit.get_entry_swapped(out, 0)
     segs = kit._parse_e0_segments(e0)
     device = kit.e0_device(segs)
@@ -57,7 +57,7 @@ def test_registers_native_graph_and_unchanged_stock_models_with_native_cost(regi
     _, ui_count = kit._decode_thumb_movw(read(device.TAB2_CNT_INSN, 4))
     rows = [read(ui_table + 44*i, 44) for i in range(ui_count)]
     row = next(row for row in rows if struct.unpack_from('<I', row)[0] == model['words'][2])
-    assert struct.unpack_from('<3I', row, 24) == (5, 7, 7)
+    assert struct.unpack_from('<3I', row, 24) == (6, 8, 8)
     assert result['instance'] == dict(dm_words=163, pm_words=0, sdram_words=24000*effect.width)
     e4 = kit.get_entry_swapped(out, 4)
     words = struct.unpack(f'<{len(e4)//4}I', e4)
@@ -189,3 +189,13 @@ def test_family_registration_preserves_both_stock_sources_and_distinct_model_pri
 def test_family_requires_explicit_costs_for_both_native_widths(costs):
     with pytest.raises(ValueError, match='cost'):
         ml.register_models(b'', dsp_costs=costs)
+
+
+def test_loop_input_is_visible_and_separate_from_owned_transport():
+    for effect in MODELS:
+        loop, play, overdub = effect.parameters[-3:]
+        assert effect.shown == 6
+        assert (loop.name, loop.slot, loop.pid, loop.state_index, loop.ui_index) == ('Loop', 6, 15, 5, 5)
+        assert (play.name, play.slot, play.pid, play.state_index, play.ui_index) == ('Play', 7, 10, 6, None)
+        assert (overdub.name, overdub.slot, overdub.pid, overdub.state_index, overdub.ui_index) == ('Overdub', 8, 11, 7, None)
+        assert all(p.type == 1 and p.default == 0 and p.restore == 'ignore' for p in (loop, play, overdub))
