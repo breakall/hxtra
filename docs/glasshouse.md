@@ -76,6 +76,11 @@ Both commands check the actual final image. The Glasshouse check executes the
 emitted startup decoder and native audio instructions against the independent
 C++ reference. Simulator instruction counts are not hardware DSP percentages.
 
+The optimized engine uses 24.5–30.1% fewer executed instructions across the
+tested mono/stereo profiles. [Measurements and reproduction](GLASSHOUSE_IMPLEMENTATION.md#dsp-execution-optimization)
+cover the unchanged source tolerances and native control transitions. The
+provisional admission charges still require device timing before calibration.
+
 ## Implementation
 
 The independent [source reference](../tools/glasshouse/PROVENANCE.md) retains the

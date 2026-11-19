@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Scalar binary32 helpers. F0 argument/result; R0..R5 and arithmetic flags volatile.
-// All helper scratch is caller-private DM384..398; no shared data or tables.
+// Math scratch is caller-private DM384..398; ADAA also owns channel18..23.
+// No shared data or tables.
 gh_recip:
     F1 = RECIPS F0;
     F2 = F0 * F1;
@@ -327,4 +328,76 @@ gh_divide:
     F1 = F1 * F2;
     F0 = DM(394,I0);
     F0 = F0 + F1;
+    RTS;
+
+// First-order ADAA soft clip with the previous integral cached per channel.
+// F0=current normalized input, I6=channel base, I0=instance -> F0=output.
+// R0..R5/flags volatile; R6..R15 and all address/mode registers preserved.
+// Channel4 retains the source's previous input,18 integral,19 valid,
+// 20 current input,21 delta,22 current integral/midpoint,23 temporary.
+// Existing log1p helper scratch384..390 remains caller-private and volatile.
+// Large deltas normally need one log1p; a cold/invalidation miss needs two.
+// Small deltas never calculate an integral and invalidate it only on change.
+gh_adaa:
+    DM(20,I6) = F0;
+    F1 = DM(4,I6);
+    F2 = F0 - F1;
+    DM(21,I6) = F2;
+    F2 = ABS F2;
+    F3 = 0.001;
+    COMP(F2,F3);
+    IF LT JUMP gh_adaa_midpoint;
+
+    F0 = ABS F0;
+    DM(22,I6) = F0;
+    CALL gh_log1p;
+    F1 = DM(22,I6);
+    F0 = F1 - F0;
+    DM(22,I6) = F0;
+    R0 = DM(19,I6);
+    R0 = PASS R0;
+    IF NE JUMP gh_adaa_cached;
+    F0 = DM(4,I6);
+    F0 = ABS F0;
+    DM(23,I6) = F0;
+    CALL gh_log1p;
+    F1 = DM(23,I6);
+    F0 = F1 - F0;
+    JUMP gh_adaa_difference;
+gh_adaa_cached:
+    F0 = DM(18,I6);
+gh_adaa_difference:
+    F1 = DM(22,I6);
+    DM(18,I6) = F1;
+    R2 = 1;
+    DM(19,I6) = R2;
+    F1 = F1 - F0;
+    DM(23,I6) = F1;
+    F0 = DM(21,I6);
+    CALL gh_recip;
+    F1 = DM(23,I6);
+    F0 = F1 * F0;
+    JUMP gh_adaa_done;
+
+gh_adaa_midpoint:
+    // Bitwise identity lets a repeated sample retain a valid integral. Either
+    // sign of zero is mathematically safe; changing its bits just invalidates.
+    COMPU(R0,R1);
+    IF EQ JUMP gh_adaa_midpoint_value;
+    R2 = 0;
+    DM(19,I6) = R2;
+gh_adaa_midpoint_value:
+    F0 = F0 + F1;
+    F1 = 0.5;
+    F0 = F0 * F1;
+    DM(22,I6) = F0;
+    F0 = ABS F0;
+    F1 = 1.0;
+    F0 = F1 + F0;
+    CALL gh_recip;
+    F1 = DM(22,I6);
+    F0 = F1 * F0;
+gh_adaa_done:
+    R1 = DM(20,I6);
+    DM(4,I6) = R1;
     RTS;
